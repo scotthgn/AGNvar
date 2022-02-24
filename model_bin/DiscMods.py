@@ -40,61 +40,60 @@ Ce = 1.6e-19 #C - elementary charge
 
 class Disc:
     """
-    Creates the spectra for a disc with some darkening radius r_dark
-    For a given nu/E will also evolve spectra for an input light-curve
+    Creates a disc object. Used to create spectra, or to evolve the disc
+    according to a light-curve
     """
+    Emin = 1e-4 #keV
+    Emax = 0.1 #keV
+    eta = 0.1 #Accretion efficiency
+    hx = 10 #height of corona
+    A = 0.5 #disc albedo
+    numR = 400 #Nr of gridpoints in R
+    numphi = 400 #Nr of gridpoints in phi
     
-    def __init__(self, r_d, r_out, r_isco, hx, inc, mdot, eta, M, A, Emin, Emax):
+    def __init__(self, r_in, r_out, r_isco, inc, mdot, M, model='AD'):
         """
         Initiates spec object
 
         Parameters
         ----------
-        r_d : float
-            Darkening radius (Similar to truncation) - units : Rg.
+        r_in : float
+            Inner radius of disc - units : Rg.
         r_out : float
             Outer disc radius - units : Rg.
         r_isco : float
             Inner most stable circular orbit (depends on a) - units : Rg.
-        hx : float
-            Height of X-ray corona - units : Rg.
         inc : float
             System inclination - units : deg.
         mdot : float
             Eddington accretion rate.
-        eta : float
-            Accretion efficiency (from L = eta * Mdot * c^2)
         M : float
             BH mass.
-        A : float
-            Disc albedo - must be between 0 and 1
-        Emin : float
-            Min energy to use when calculating power - units : keV
-        Emax : float
-            Max energy to use when calculating power - units : keV
+        model : str
+            Model to use, possibilities are: AD (standard accretion disc), 
+            DD (Darkened accretion disc), and WC (Comptonised disc)
         
         """
         #Read params
-        self.r_d = r_d
+        self.r_in = r_in
         self.r_out = r_out
         self.r_isco = r_isco
-        self.hx = hx
         self.inc = np.deg2rad(inc)
         self.mdot = mdot
-        self.eta = eta
         self.M = M
-        self.A = A
-        self.Emin = Emin
-        self.Emax = Emax
+        self.mod = model
         
-        
+        #Performing checks
+        self.check_mod()
+        self.check_inc()
+
         #Conversion factors to physical units
         self.Rg = (G*self.M)/c**2 #Grav radius for this system in meters
         self.Mdot_edd = (4*np.pi*G*self.M*mp)/(self.eta*sigmaT*c)
         
         
         #Physical units
-        self.R_d = self.r_d * self.Rg
+        self.R_in = self.r_in * self.Rg
         self.R_out = self.r_out * self.Rg
         self.R_isco = self.r_isco * self.Rg
         self.Hx = self.hx * self.Rg
@@ -102,12 +101,15 @@ class Disc:
         
         
         #Creating grid over disc
-        dlog_R = (np.log10(self.R_out) - np.log10(self.R_isco))/400
+        dlog_R = (np.log10(self.R_out) - np.log10(self.R_isco))/self.numR
         R_inMidBin = 10**(np.log10(self.R_isco) + dlog_R/2)
         R_outMidBin = 10**(np.log10(self.R_out) - dlog_R/2)
         
         self.R_grid, self.phi_grid = np.meshgrid(np.geomspace(
-            R_inMidBin, R_outMidBin, 400), np.linspace(0, 2*np.pi, 400))
+            R_inMidBin, R_outMidBin, self.numR), np.linspace(0, 2*np.pi, self.numphi))
+        
+        #Creating relevant mask over grid - to accounts for truncation radii
+        self.d_mask = np.ma.getmask(np.ma.masked_less_equal(self.R_grid, self.R_in))
         
         
         #Setting up energy grid for power calculations
@@ -118,9 +120,44 @@ class Disc:
         self.nu_max = nu_max.value
         self.nu_grid = np.geomspace(self.nu_min, self.nu_max, 1000)
         
-    
+        
+        #Disc properties that don't change during evolution
+        self.tau_grid = self.delay_surf() #delay surface
+        self.Td = self.T_int() #intrinisc disc temperature
+        self.Lx = self.calc_XrayPower() #Mean X-ray power
 
-    #The delay surface on the disc (following Welsh & Thorne 1991)
+    
+    
+    """
+    Performing checks on certain input variables
+    (i.e Making sure they conform, so don't brake code!!!)
+    """
+    
+    def check_mod(self):
+        if self.mod == 'AD' or self.mod == 'WC' or self.mod == 'DD':
+            pass
+        else:
+            print('Wrong model input \n'
+                  'Must be AD (accretion disc), '
+                  'DD (darkened accretion disc), or '
+                  'WC (Comptonised disc) \n')  
+            raise AssertionError
+    
+    def check_inc(self):
+        if self.inc >= 0 and self.inc <= np.pi/2:
+            pass
+        else:
+            print('Inclination outside hard range [0, 90] deg \n')
+            raise AssertionError
+            
+    
+    
+    
+    """
+    Now onto the acutal model
+    """
+    
+    #Calculate time delay across disc
     def delay_surf(self):
         #Delay surface in seconds
         tau_sec = (1/c) * (np.sqrt(self.R_grid**2 + self.Hx**2) + 
@@ -167,6 +204,8 @@ class Disc:
     
     
     
+    
+    
     """
     Section for intrinsic luminosities - used to calculate mean X-ray 
     power
@@ -187,6 +226,8 @@ class Disc:
             Bolometric luminosity of disc - units : W.
 
         """      
+        #Using different masking than the one initiated in __init__
+        #Since this function will be used for more than just r_in
         R_cut = r_cut * self.Rg
         Td_all = self.T_int()
         
@@ -215,10 +256,13 @@ class Disc:
     
     def calc_XrayPower(self):
         L_full = self.int_power(self.r_isco)
-        L_tr = self.int_power(self.r_d)
+        L_tr = self.int_power(self.r_in)
         
         Lxr = L_full - L_tr
         return Lxr
+    
+    
+    
     
     
     
@@ -227,17 +271,21 @@ class Disc:
     versions
     """
     
-    def calc_LnuDark(self, nu, Lirr):
+    def calc_Lnu(self, nu, Lirr):
         
-        T_intAll = self.T_int()
-        T_repAll = self.T_rep(Lirr)
+        T_int = self.Td
+        T_rep = self.T_rep(Lirr)
         
-        #Applying mask to T_int for dark section of disc
-        R_mask = np.ma.masked_less_equal(self.R_grid, self.R_d)
-        T_intMa = np.ma.masked_where(np.ma.getmask(R_mask), T_intAll)
-        T_intMa = T_intMa.filled(0) #Placing 0 on mask so adds properly to Trep
+        #Applying mask to T grids (model dependent) to account for darkening
+        #or truncations
+        T_int = np.ma.masked_where(self.d_mask, T_int)
         
-        T_tot = (T_intMa**4 + T_repAll**4)**(1/4)
+        if self.mod == 'AD' or self.mod == 'WC':
+            T_rep = np.ma.masked_where(self.d_mask, T_rep)
+        else:
+            T_int = T_int.filled(0) #Placing 0 on mask so adds properly to Trep
+        
+        T_tot = (T_int**4 + T_rep**4)**(1/4)
         
         B_nu = ((2*h*nu**3)/c**2) * (
             1/(np.exp((h*nu)/(k_B * T_tot)) -1))
@@ -249,27 +297,6 @@ class Disc:
         
         return Lnu
     
-    
-    def calc_LnuTrunc(self, nu, Lirr):
-        T_intAll = self.T_int()
-        T_repAll = self.T_rep(Lirr)
-        
-        #Applying mask to T_int for dark section of disc
-        R_mask = np.ma.masked_less_equal(self.R_grid, self.R_d)
-        T_intMa = np.ma.masked_where(np.ma.getmask(R_mask), T_intAll)
-        T_repMa = np.ma.masked_where(np.ma.getmask(R_mask), T_repAll)
-        
-        T_tot = (T_intMa**4 + T_repMa**4)**(1/4)
-        
-        B_nu = ((2*h*nu**3)/c**2) * (
-            1/(np.exp((h*nu)/(k_B * T_tot)) -1))
-        
-        Fnu = np.pi * B_nu
-        dLs_r = 2 * np.trapz(y=Fnu, x=self.phi_grid[:, 0], axis=0)
-        Lnu = np.trapz(y=dLs_r * np.cos(self.inc) * self.R_grid[0, :], 
-                        x=self.R_grid[0, :])
-        
-        return Lnu
     
     
     
@@ -279,7 +306,7 @@ class Disc:
     version using multiprocessing for speedy analysis
     """
     
-    def do_evolve(self, nu, l_xs, ts, mode='dark'):
+    def do_evolve(self, nu, l_xs, ts):
         """
         Evolves the system according to input X-ray light-curve
 
@@ -308,21 +335,12 @@ class Disc:
         except:
             ts = ts - ts[0]
         
-        #Checking valid mode (dark or trunc)
-        try:
-            assert mode == 'dark' or mode == 'trunc'
-        except:
-            print('Not a valid mode!')
-            print('Valid modes are: dark OR trunc')
-            exit()
+
         
-        tau_surf = self.delay_surf()
-        Lx_mean = self.calc_XrayPower()
+        Lxs = l_xs * self.Lx #array of x-ray lums
+        Lin = np.array([self.Lx]) #array of Ls in play
         
-        Lxs = l_xs * Lx_mean #array of x-ray lums
-        Lin = np.array([Lx_mean]) #array of Ls in play
-        
-        Lirr = np.ndarray(np.shape(tau_surf)) #irradiation array
+        Lirr = np.ndarray(np.shape(self.tau_grid)) #irradiation array
         Lcurve_mod = np.array([]) #Predicted light curve output
         for i in tqdm(range(len(ts))): #tqdm gives progress bar
             
@@ -336,22 +354,17 @@ class Disc:
             
             #Sorting irradiation array
             for j in range(len(t_delay)):
-                Lirr[tau_surf <= t_delay[j]] = Lin[j]
+                Lirr[self.tau_grid <= t_delay[j]] = Lin[j]
             
-            
-            #Calculating Lnu based off model input string
-            if mode == 'dark':
-                Lnu_t = self.calc_LnuDark(nu, Lirr)
-            elif mode == 'trunc':
-                Lnu_t = self.calc_LnuTrunc(nu, Lirr)
-                
+            #Calculating Lnu for current time step
+            Lnu_t = self.calc_Lnu(nu, Lirr)            
             Lcurve_mod = np.append(Lcurve_mod, [Lnu_t])
         
         return Lcurve_mod
             
     
     
-    def multi_evolve(self, nus, l_xs, ts, numCPU, mode='dark'):
+    def multi_evolve(self, nus, l_xs, ts, numCPU):
         """
         Multithreads do_evolve() - allows for calculation of multiple 
         frequencies simoultaneously
@@ -374,7 +387,7 @@ class Disc:
 
         """
         
-        evolve_func = partial(self.do_evolve, l_xs=l_xs, ts=ts, mode=mode)
+        evolve_func = partial(self.do_evolve, l_xs=l_xs, ts=ts)
         with Pool(numCPU) as p:
             l_curves = p.map(evolve_func, nus)
             
@@ -388,20 +401,15 @@ class Disc:
     
     
     
+    
     """
     Section for calculating the spectra. Seperate method for each model
     (currently just truncated disc (AD_spec) and dark disc (darkAD_spec))
     """
     
-    def AD_spec(self, r_tr):
+    def Calc_spec(self):
         """
-        Calculates spec for standard accretion disc - usefull for comparing
-        to dark disc model
-
-        Parameters
-        ----------
-        r_tr : float
-            Truncation radius - units : Rg.
+        Calculates spec for current accretion disc model 
 
         Returns
         -------
@@ -410,21 +418,23 @@ class Disc:
 
         """
         
-        Lx = self.calc_XrayPower() #For irradiating the disc
+        Lx = self.Lx #For irradiating the disc
+
+        Tint = self.Td
+        Trep = self.T_rep(Lx)
         
-        Rcut = r_tr * self.Rg
-        Tint_all = self.T_int()
-        Trep_all = self.T_rep(Lx)
+        #Masking grid values below r_tr/r_d
+        Tint = np.ma.masked_where(self.d_mask, Tint)
+        if self.mod == 'AD' or self.mod == 'WC':
+            Trep = np.ma.masked_where(self.d_mask, Trep)
+        else:
+            Tint = Tint.filled(0) #Placing 0 on mask so adds properly to Trep
         
-        #Masking grid values below r_tr
-        R_mask = np.ma.masked_less_equal(self.R_grid, Rcut)
-        Td = np.ma.masked_where(np.ma.getmask(R_mask), Tint_all)
-        Tr = np.ma.masked_where(np.ma.getmask(R_mask), Trep_all)
         
         #Flattening since no phi dependence
-        Tint_flat = Td[0, :]
-        Trep_flat = Tr[0, :]        
-        R_flat = R_mask[0, :]
+        Tint_flat = Tint[0, :]
+        Trep_flat = Trep[0, :]        
+        R_flat = self.R_grid[0, :]
       
         T_tot = (Tint_flat**4 + Trep_flat**4)**(1/4)
         
@@ -438,49 +448,7 @@ class Disc:
         return Lnu
     
     
-    def darkAD_spec(self, rd):
-        """
-        Calculates spectra for accretion disc, with dark inner region
 
-        Parameters
-        ----------
-        rd : float
-            Darkening radius - units : Rg.
-
-        Returns
-        -------
-        Lnu : 1D-array
-            Output luminosities for spectra - units : W.
-
-        """
-        
-        Lx = self.calc_XrayPower()
-        
-        Rcut = rd * self.Rg
-        Tint_all = self.T_int()
-        Trep_all = self.T_rep(Lx)
-        
-        #Masking grid values for intrinsic below rd
-        R_mask = np.ma.masked_less_equal(self.R_grid, Rcut)
-        Td = np.ma.masked_where(np.ma.getmask(R_mask), Tint_all)
-        Td = Td.filled(0)
-        
-        #Flattening since no phi dependence
-        Tint_flat = Td[0, :]
-        Trep_flat = Trep_all[0, :]
-        R_flat = self.R_grid[0, :]
-        
-        T_tot = (Tint_flat**4 + Trep_flat**4)**(1/4)
-        
-        B_nu = ((2*h*self.nu_grid**3)/c**2) * (
-            1/(np.exp((h*self.nu_grid)/(k_B * T_tot[:, np.newaxis])) - 1))
-        
-        F_nu = np.pi * B_nu
-        dLnu = 2 * 2*np.pi * F_nu * R_flat[:, np.newaxis]
-        Lnu = np.trapz(y=dLnu * np.cos(self.inc), x=R_flat, axis=0)
-        
-        return Lnu
-        
         
         
     
@@ -497,30 +465,31 @@ if __name__ == '__main__':
     eta = 0.1
     M = 2e8
     
-    sp = Disc(r_d, r_out, r_isco, hx, inc, mdot, eta, M, 0.5, 1e-4, 0.1)
+    sp1 = Disc(6, r_out, r_isco, inc, mdot, M, model='AD')
+    sp2 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
+    sp3 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='DD')
+    print(sp1.Lx, sp2.Lx, sp3.Lx)
+    
     
     ts_test = np.array([0, 1, 2, 3, 4])
     xlfrac = np.array([1, 1.2, 1.3, 1.1, 0.8])
     nus = np.array([1e14, 1e15, 1e13])
     
-    print(sp.calc_XrayPower())
     
-    #lm = sp.multi_evolve(nus, xlfrac, ts_test, 3)
-    #print(lm)
-    
-   
+    lm = sp3.multi_evolve(nus, xlfrac, ts_test, 3)
+    print(lm)
+
     #examining the spectra
-    s_fullDisc = sp.AD_spec(6)
-    s_truncDisc = sp.AD_spec(r_d)
-    s_darkDisc = sp.darkAD_spec(r_d)
-    nus = sp.nu_grid
-    
+    s_fullDisc = sp1.Calc_spec()
+    s_truncDisc = sp2.Calc_spec()
+    s_darkDisc = sp3.Calc_spec()
+    nus = sp1.nu_grid
+
     #Converting to erg
     s_fd = (s_fullDisc * u.W).to(u.erg/u.s).value
     s_td = (s_truncDisc * u.W).to(u.erg/u.s).value
     s_dd = (s_darkDisc * u.W).to(u.erg/u.s).value
     
-    print(max(s_fd), max(s_td))
     plt.loglog(nus, nus * s_fd, label='AD r_isco')
     plt.loglog(nus, nus * s_td, label='AD r_tr=25')
     plt.loglog(nus, nus * s_dd, label='dark AD r_d=25')
@@ -542,5 +511,5 @@ if __name__ == '__main__':
     
     plt.legend()
     plt.show()
-        
+
     
