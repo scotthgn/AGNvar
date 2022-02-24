@@ -1,6 +1,6 @@
 # AGNvar
 
-Python code for spectral timing analysis of AGN - currently under 'construction'
+Python code for spectral timing analysis of AGN - currently under 'construction'.
 Will eventually have following functionality:
 
 1. Create composite AGN strucutre models (i.e Accretion disc + BLR clouds)
