@@ -128,9 +128,10 @@ if __name__ == '__main__':
     eta = 0.1
     M = 2e8
     
-    sp = md.DarkDisc(r_d, r_out, r_isco, hx, inc, mdot, eta, M, 0.5, 1e-4, 0.1)
+    sp = md.Disc(r_d, r_out, r_isco, inc, mdot, M)
     nus = sp.nu_grid
-    fmod = sp.AD_spec(r_d)
+    fmod = sp.Calc_spec()
+    print(max(fmod))
     
     newNorm = 1/(4*np.pi * ((200*u.Mpc).to(u.cm))**2)
     

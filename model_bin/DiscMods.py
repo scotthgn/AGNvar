@@ -20,6 +20,7 @@ from functools import partial
 from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
+import excTHCOMP as thc
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
@@ -41,7 +42,19 @@ Ce = 1.6e-19 #C - elementary charge
 class Disc:
     """
     Creates a disc object. Used to create spectra, or to evolve the disc
-    according to a light-curve
+    according to a light-curve according to standard accretion disc.
+    
+    To possible models: truncated (AD) and darkened (DD). 
+    
+    AD corresponds to a standard Shakura-Sunyaev disc, truncated at some 
+    radius. If you want the disc to extend to r_isco, simply set r_in = r_isco
+    
+    DD corresponds to a standard AD down to a darkening radius (r_in), beyon
+    which all the intrinsic power is transported away through some magical
+    process (probabliy magnetic fields or something). Hence the only 
+    contribution to the flux from within the darkening radius will be the 
+    reflected component.
+    
     """
     Emin = 1e-4 #keV
     Emax = 0.1 #keV
@@ -68,10 +81,10 @@ class Disc:
         mdot : float
             Eddington accretion rate.
         M : float
-            BH mass.
+            BH mass - units : Msol.
         model : str
             Model to use, possibilities are: AD (standard accretion disc), 
-            DD (Darkened accretion disc), and WC (Comptonised disc)
+            DD (Darkened accretion disc)
         
         """
         #Read params
@@ -134,13 +147,12 @@ class Disc:
     """
     
     def check_mod(self):
-        if self.mod == 'AD' or self.mod == 'WC' or self.mod == 'DD':
+        if self.mod == 'AD' or self.mod == 'DD':
             pass
         else:
             print('Wrong model input \n'
-                  'Must be AD (accretion disc), '
-                  'DD (darkened accretion disc), or '
-                  'WC (Comptonised disc) \n')  
+                  'Must be AD (accretion disc), or \n'
+                  'DD (darkened accretion disc) \n')  
             raise AssertionError
     
     def check_inc(self):
@@ -280,7 +292,7 @@ class Disc:
         #or truncations
         T_int = np.ma.masked_where(self.d_mask, T_int)
         
-        if self.mod == 'AD' or self.mod == 'WC':
+        if self.mod == 'AD':
             T_rep = np.ma.masked_where(self.d_mask, T_rep)
         else:
             T_int = T_int.filled(0) #Placing 0 on mask so adds properly to Trep
@@ -401,10 +413,46 @@ class Disc:
     
     
     
+    def evolve_fullSpec(self, l_xs, ts, num_nuBin, numCPU):
+        """
+        Evolve the entire spectrum according to input X-ray light-curve
+        NOTE! Computationally intense!!!
+        Parameters
+        ----------
+        l_xs : 1D-array
+            See do_evolve().
+        ts : 1D-array
+            See do_evolve().
+        numCPU : float
+            Number of CPU cores to use.
+        num_nuBin : float
+            Number of frequency bins to use between nu_min and nu_max. 
+            Set to -1 to use self.nu_grid (note that this will be
+            computationally intense, and impractical for most applications)
+
+        Returns
+        -------
+        all_Ls : 2D_array
+            All output light-curves stacked in columns.
+        nus : 1D-array
+            Corresponding frequencies for spectra
+
+        """
+        
+        if num_nuBin == -1:
+            nus = self.nu_grid
+        else:
+            nus = np.geomspace(self.nu_min, self.nu_max, num_nuBin)
+        
+        all_Ls = self.multi_evolve(nus, l_xs, ts, numCPU)
+        
+        return all_Ls, nus
+    
+    
+    
     
     """
-    Section for calculating the spectra. Seperate method for each model
-    (currently just truncated disc (AD_spec) and dark disc (darkAD_spec))
+    Section for calculating the spectra.
     """
     
     def Calc_spec(self):
@@ -425,7 +473,7 @@ class Disc:
         
         #Masking grid values below r_tr/r_d
         Tint = np.ma.masked_where(self.d_mask, Tint)
-        if self.mod == 'AD' or self.mod == 'WC':
+        if self.mod == 'AD':
             Trep = np.ma.masked_where(self.d_mask, Trep)
         else:
             Tint = Tint.filled(0) #Placing 0 on mask so adds properly to Trep
@@ -445,13 +493,113 @@ class Disc:
         dLnu = 2 * 2*np.pi * F_nu * R_flat[:, np.newaxis]
         Lnu = np.trapz(y=dLnu * np.cos(self.inc), x=R_flat, axis=0)
         
+        
         return Lnu
     
     
 
-        
-        
+
+
+class CompDisc(Disc):
+    """
+    A comptonised accretion disc. Calculates spectra according to AD model
+    in Disc - then excecutes THCOMP (Zdziarski et al. 2020) to calculate
+    the Comptonised spectrum
+    """
     
+    def __init__(self, r_in, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c):
+        """
+        Initiates class
+        Inherits the initiation from disc - only now with two extra parameters
+
+        Parameters
+        ----------
+        r_in : float
+            Inner radius of disc - units : Rg.
+        r_out : float
+            Outer disc radius - units : Rg.
+        r_isco : float
+            Inner most stable circular orbit (depends on a) - units : Rg.
+        inc : float
+            System inclination - units : deg.
+        mdot : float
+            Eddington accretion rate.
+        M : float
+            BH mass - units : Msol.
+        gamma_c : float
+            Photon index of resulting Comptonised spectrum.
+        kTe_c : float
+            Electron temperature (high energy cut-off) of Comptonised medium.
+            Units : keV.
+        """
+        
+        Disc.__init__(self, r_in, r_out, r_isco, inc, mdot, M, model='AD')
+        
+        #read new params
+        self.gamma_c = gamma_c
+        self.kTe_c = kTe_c
+    
+    
+    """
+    Section for calculating and evolving Comptonised spectrum
+    """
+    def Calc_spec(self):
+        Ls = Disc.Calc_spec(self)
+        #COnverting nu to E - as this is required by excTHCOMP
+        Es = (self.nu_grid * u.Hz).to(u.keV, equivalencies=u.spectral()).value
+        
+        Enew, Lnew = thc.do_THCOMP(Ls, Es, 'W/Hz', self.gamma_c, self.kTe_c, z=0)
+        return Enew, Lnew
+    
+    
+    def evolve_spec(self, l_xs, ts, num_nuBin, numCPU):
+        """
+        Evolves the comptonised spectra according to input X-ray light-curve
+        Note, due to the convolution nature of thcomp can only evolve full 
+        spectrum, rather than single band passes - will hopefully figure
+        out a way round this in future - as entire spectrum is computationally
+        intense and not necesarily relevant!!!
+
+        Parameters
+        ----------
+        l_xs : 1D-array
+            See do_evolve().
+        ts : 1D-array
+            See do_evolve().
+        numCPU : float
+            Number of CPU cores to use.
+        num_nuBin : float
+            Number of frequency bins to use between nu_min and nu_max. 
+            Set to -1 to use self.nu_grid (note that this will be
+            computationally intense, and impractical for most applications)
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        #Evolving disc spec first
+        Ld, nu_d = self.evolve_fullSpec(l_xs, ts, num_nuBin, numCPU)
+        print(np.shape(Ld))
+            
+        
+        E_d = (nu_d * u.Hz).to(u.keV, equivalencies=u.spectral()).value
+        #Convolving thcomp onto each time stamp
+        for i in range(len(ts)):
+            L_current = Ld[i, :]
+            
+            Ec, Lc = thc.do_THCOMP(L_current, E_d, 'W/Hz', self.gamma_c, self.kTe_c, z=0)
+            
+            if i == 0:
+                L_all = Lc
+                E_all = Ec
+            else:
+                L_all = np.column_stack((L_all, Lc))
+                E_all = np.column_stack((E_all, Ec))
+            
+        return E_all, L_all
+            
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
@@ -464,6 +612,9 @@ if __name__ == '__main__':
     mdot = 10**(-1.4)
     eta = 0.1
     M = 2e8
+    
+    
+    #Testing Disc object
     
     sp1 = Disc(6, r_out, r_isco, inc, mdot, M, model='AD')
     sp2 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
@@ -511,5 +662,24 @@ if __name__ == '__main__':
     
     plt.legend()
     plt.show()
-
     
+    
+    #Testing Comptonised disc object
+    gamma_c = 1.7
+    kTe_c = 1
+    
+    wcd = CompDisc(r_d, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c)
+    
+    Ec, lc = wcd.Calc_spec()
+    
+    plt.loglog(Ec, Ec * lc)
+    plt.ylim(1e18, 1e22)
+    plt.show()
+    
+    et, lct = wcd.evolve_spec(xlfrac, ts_test, 400, 4)
+    print(np.shape(lct))
+    for k in range(len(ts_test)):
+        plt.loglog(et[:, k], et[:, k] * lct[:, k])
+    
+    plt.ylim(1e18, 1e22)
+    plt.show()
