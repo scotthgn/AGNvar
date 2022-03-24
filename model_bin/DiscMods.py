@@ -20,7 +20,7 @@ from functools import partial
 from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
-import excTHCOMP as thc
+#import excTHCOMP as thc
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
@@ -97,8 +97,10 @@ class Disc:
         self.mod = model
         
         #Performing checks
-        self.check_mod()
-        self.check_inc()
+        self._check_mod()
+        self._check_inc()
+        self._check_risco()
+        self._check_rlims()
 
         #Conversion factors to physical units
         self.Rg = (G*self.M)/c**2 #Grav radius for this system in meters
@@ -123,6 +125,7 @@ class Disc:
         
         #Creating relevant mask over grid - to accounts for truncation radii
         self.d_mask = np.ma.getmask(np.ma.masked_less_equal(self.R_grid, self.R_in))
+        #print(self.d_mask)
         
         
         #Setting up energy grid for power calculations
@@ -146,21 +149,36 @@ class Disc:
     (i.e Making sure they conform, so don't brake code!!!)
     """
     
-    def check_mod(self):
+    def _check_mod(self):
         if self.mod == 'AD' or self.mod == 'DD':
             pass
         else:
-            print('Wrong model input \n'
+            raise AssertionError('Wrong model input \n'
                   'Must be AD (accretion disc), or \n'
-                  'DD (darkened accretion disc) \n')  
-            raise AssertionError
+                  'DD (darkened accretion disc) \n')
     
-    def check_inc(self):
+    def _check_inc(self):
         if self.inc >= 0 and self.inc <= np.pi/2:
             pass
         else:
-            print('Inclination outside hard range [0, 90] deg \n')
-            raise AssertionError
+            raise AssertionError('Inclination outside hard range [0, 90] deg \n')
+    
+    def _check_risco(self):
+        if self.r_in >= self.r_isco:
+            pass
+        else:
+            raise AssertionError('r_in < r_isco - Not physically permitted!!')
+    
+    def _check_rlims(self):
+        if self.r_out >= 2 * self.r_in:
+            pass
+        else:
+            raise AssertionError('r_out < 2*r_in -- WARNING!!! \n'
+                                 'Insufficient spacing between r_out and r_in \n'
+                                 'on grid! - Increase r_out or reduce r_in to \n'
+                                 'satisfy this criteria')
+    
+        
             
     
     
@@ -271,6 +289,7 @@ class Disc:
         L_tr = self.int_power(self.r_in)
         
         Lxr = L_full - L_tr
+        print(Lxr)
         return Lxr
     
     
@@ -298,6 +317,7 @@ class Disc:
             T_int = T_int.filled(0) #Placing 0 on mask so adds properly to Trep
         
         T_tot = (T_int**4 + T_rep**4)**(1/4)
+        
         
         B_nu = ((2*h*nu**3)/c**2) * (
             1/(np.exp((h*nu)/(k_B * T_tot)) -1))
@@ -604,11 +624,13 @@ class CompDisc(Disc):
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     
-    r_d = 25
-    r_out = 1e4
+    #r_d = 10.546530569328386
+    r_d = 13.85
+    #r_out = 392.56353894425473
+    r_out = 4621
     r_isco = 6
     hx = 10
-    inc = 20
+    inc = 7.36 
     mdot = 10**(-1.4)
     eta = 0.1
     M = 2e8
@@ -619,7 +641,7 @@ if __name__ == '__main__':
     sp1 = Disc(6, r_out, r_isco, inc, mdot, M, model='AD')
     sp2 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
     sp3 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='DD')
-    print(sp1.Lx, sp2.Lx, sp3.Lx)
+    #print(sp1.Lx, sp2.Lx, sp3.Lx)
     
     
     ts_test = np.array([0, 1, 2, 3, 4])
@@ -627,8 +649,11 @@ if __name__ == '__main__':
     nus = np.array([1e14, 1e15, 1e13])
     
     
-    lm = sp3.multi_evolve(nus, xlfrac, ts_test, 3)
-    print(lm)
+    lm = sp2.multi_evolve(nus, xlfrac, ts_test, 3)
+    print(np.mean(lm[0]))
+    m = np.mean(lm[0])
+    if m == 0:
+        print('yes')
 
     #examining the spectra
     s_fullDisc = sp1.Calc_spec()
@@ -664,6 +689,8 @@ if __name__ == '__main__':
     plt.show()
     
     
+    
+    """
     #Testing Comptonised disc object
     gamma_c = 1.7
     kTe_c = 1
@@ -683,3 +710,4 @@ if __name__ == '__main__':
     
     plt.ylim(1e18, 1e22)
     plt.show()
+    """
