@@ -20,7 +20,7 @@ from functools import partial
 from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
-#import excTHCOMP as thc
+import excTHCOMP as thc
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
@@ -58,7 +58,7 @@ class Disc:
     """
     Emin = 1e-4 #keV
     Emax = 0.1 #keV
-    eta = 0.1 #Accretion efficiency
+    eta = 0.057 #Accretion efficiency
     hx = 10 #height of corona
     A = 0.5 #disc albedo
     numR = 400 #Nr of gridpoints in R
@@ -374,7 +374,8 @@ class Disc:
         
         Lirr = np.ndarray(np.shape(self.tau_grid)) #irradiation array
         Lcurve_mod = np.array([]) #Predicted light curve output
-        for i in tqdm(range(len(ts))): #tqdm gives progress bar
+        #for i in tqdm(range(len(ts))): #tqdm gives progress bar
+        for i in range(len(ts)):
             
             Lin = np.append(Lin, [Lxs[i]])
             if i == 0:
@@ -606,7 +607,7 @@ class CompDisc(Disc):
         
         E_d = (nu_d * u.Hz).to(u.keV, equivalencies=u.spectral()).value
         #Convolving thcomp onto each time stamp
-        for i in range(len(ts)):
+        for i in tqdm(range(len(ts))):
             L_current = Ld[i, :]
             
             Ec, Lc = thc.do_THCOMP(L_current, E_d, 'W/Hz', self.gamma_c, self.kTe_c, z=0)
@@ -618,29 +619,36 @@ class CompDisc(Disc):
                 L_all = np.column_stack((L_all, Lc))
                 E_all = np.column_stack((E_all, Ec))
             
-        return E_all, L_all
+        return Ec, L_all
             
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     
     #r_d = 10.546530569328386
-    r_d = 13.85
+    #r_d = 13.85
+    r_d = 255
     #r_out = 392.56353894425473
-    r_out = 4621
+    #r_out = 5470
+    r_out = 5030
     r_isco = 6
     hx = 10
-    inc = 7.36 
+    #inc = 7.02
+    inc = 79.5
     mdot = 10**(-1.4)
     eta = 0.1
     M = 2e8
     
+    rdi =26.7
+    roi = 400
+    inci = 20
     
     #Testing Disc object
-    
-    sp1 = Disc(6, r_out, r_isco, inc, mdot, M, model='AD')
+    """
+    #sp1 = Disc(6, r_out, r_isco, inc, mdot, M, model='AD')
     sp2 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
-    sp3 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='DD')
+    sp3 = Disc(rdi, roi, r_isco, inci, mdot, M, model='AD')
+    #sp3 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='DD')
     #print(sp1.Lx, sp2.Lx, sp3.Lx)
     
     
@@ -650,27 +658,28 @@ if __name__ == '__main__':
     
     
     lm = sp2.multi_evolve(nus, xlfrac, ts_test, 3)
-    print(np.mean(lm[0]))
+    print(np.shape(lm[:, 0]))
     m = np.mean(lm[0])
     if m == 0:
         print('yes')
 
     #examining the spectra
-    s_fullDisc = sp1.Calc_spec()
+    #s_fullDisc = sp1.Calc_spec()
     s_truncDisc = sp2.Calc_spec()
     s_darkDisc = sp3.Calc_spec()
-    nus = sp1.nu_grid
+    nus = sp2.nu_grid
 
     #Converting to erg
-    s_fd = (s_fullDisc * u.W).to(u.erg/u.s).value
+    #s_fd = (s_fullDisc * u.W).to(u.erg/u.s).value
     s_td = (s_truncDisc * u.W).to(u.erg/u.s).value
     s_dd = (s_darkDisc * u.W).to(u.erg/u.s).value
     
-    plt.loglog(nus, nus * s_fd, label='AD r_isco')
+    #plt.loglog(nus, nus * s_fd, label='AD r_isco')
     plt.loglog(nus, nus * s_td, label='AD r_tr=25')
     plt.loglog(nus, nus * s_dd, label='dark AD r_d=25')
     
-    plt.ylim(1e43, 1e45)
+    #plt.ylim(1e43, 1e45)
+    plt.ylim(1e40, 1e45)
     plt.xlim(6e13, 2e16)
     
     plt.ylabel(r'$\nu F_{\nu}$   erg/s')
@@ -689,8 +698,8 @@ if __name__ == '__main__':
     plt.show()
     
     
-    
     """
+    
     #Testing Comptonised disc object
     gamma_c = 1.7
     kTe_c = 1
@@ -706,8 +715,8 @@ if __name__ == '__main__':
     et, lct = wcd.evolve_spec(xlfrac, ts_test, 400, 4)
     print(np.shape(lct))
     for k in range(len(ts_test)):
-        plt.loglog(et[:, k], et[:, k] * lct[:, k])
+        plt.loglog(et, et * lct[:, k])
     
     plt.ylim(1e18, 1e22)
     plt.show()
-    """
+    
