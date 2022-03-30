@@ -523,9 +523,14 @@ class Disc:
 
 class CompDisc(Disc):
     """
-    A comptonised accretion disc. Calculates spectra according to AD model
-    in Disc - then excecutes THCOMP (Zdziarski et al. 2020) to calculate
-    the Comptonised spectrum
+    A comptonised accretion disc. Calculates the seed photons as a black-body
+    from a disc, then uses pyNTHCOMP; python version of the XSPEC model NTHCOMP
+    (Zdziarski, Johnson & Magdziarz, 1996; Zycki, Done & Smith, 1999). Adapted 
+    by Thomas et al. 2016.
+    
+    Note! A previous version of the code calculated the entire disc spectrum, 
+    and then convolved it with THCOMP to calculate the Comptonised spectrum. 
+    However, this is uneccesarily slow - hence the change!
     """
     
     def __init__(self, r_in, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c):
