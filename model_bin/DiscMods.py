@@ -16,25 +16,28 @@ a single model component
 
 import numpy as np
 import astropy.units as u
+import astropy.constants as constants
 from functools import partial
 from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
 import excTHCOMP as thc
+from pyNTHCOMP import donthcomp
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
 
 
 """Usefull constants"""
-h = 6.63e-34 #Js - Planck constant
-G = 6.67e-11 * 1.99e+30 #m^3/(M_sol^1 s^2) - Gravitational constant
-sigma = 5.67e-8 #W/m^2K^4 - Stefan-Boltzmann constant
-k_B = 1.38e-23 #J/K - Boltzmann constant
-c = 3e+8 #m/s - Speed of light
-mp = 1.67e-27 #kg - Proton mass
-sigmaT = 6.653e-29 #m^-2 - Thomson cross section
-Ce = 1.6e-19 #C - elementary charge
+h = constants.h.value #Js - Planck constant
+G = constants.G.value * constants.M_sun.value #m^3/(M_sol^1 s^2) - Gravitational constant
+sigma = constants.sigma_sb.value #W/m^2K^4 - Stefan-Boltzmann constant
+k_B = constants.k_B.value #J/K - Boltzmann constant
+c = constants.c.value #m/s - Speed of light
+mp = constants.m_p.value #kg - Proton mass
+sigmaT = constants.sigma_T.value #m^-2 - Thomson cross section
+Ce = constants.e.value #C - elementary charge
+
 
 
 
@@ -58,7 +61,7 @@ class Disc:
     """
     Emin = 1e-4 #keV
     Emax = 0.1 #keV
-    eta = 0.057 #Accretion efficiency
+    eta = 0.057 #Accretion efficiency for non-spinning BH
     hx = 10 #height of corona
     A = 0.5 #disc albedo
     numR = 400 #Nr of gridpoints in R
@@ -566,6 +569,31 @@ class CompDisc(Disc):
         self.kTe_c = kTe_c
     
     
+    
+    def _L_local(self, Tseed):
+        """
+        Calculates the local luminosity for a point/points on the disc
+        Ued for normalising the resulting COmptonised spectrum from NTHCOMP
+        
+        Assumes dL = \sigma_SB T^4
+        
+        Parameters
+        ----------
+        Tseed : float or array
+            Temperature of seed photons at point of calculation.
+
+        Returns
+        -------
+        None.
+
+        """
+        return
+        
+        
+        
+    
+    
+    
     """
     Section for calculating and evolving Comptonised spectrum
     """
@@ -649,7 +677,7 @@ if __name__ == '__main__':
     inci = 20
     
     #Testing Disc object
-    """
+    
     #sp1 = Disc(6, r_out, r_isco, inc, mdot, M, model='AD')
     sp2 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
     sp3 = Disc(rdi, roi, r_isco, inci, mdot, M, model='AD')
@@ -725,4 +753,5 @@ if __name__ == '__main__':
     
     plt.ylim(1e18, 1e22)
     plt.show()
+    """
     
