@@ -712,7 +712,8 @@ if __name__ == '__main__':
     plt.ylim(1e18, 1e22)
     plt.show()
     
-    et, lct = wcd.evolve_spec(xlfrac, ts_test, 400, 4)
+    et, lct = wcd.evolve_spec(xlfrac, ts_test, 2, 1)
+    print(et)
     print(np.shape(lct))
     for k in range(len(ts_test)):
         plt.loglog(et, et * lct[:, k])
