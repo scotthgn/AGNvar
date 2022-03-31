@@ -601,8 +601,8 @@ class Disc:
         B_nu = ((2*h*self.nu_grid**3)/c**2) * (
             1/(np.exp((h*self.nu_grid)/(k_B * T_tot[:, np.newaxis])) - 1))
         
-        #F_nu = np.pi * B_nu
-        F_nu = B_nu
+        F_nu = np.pi * B_nu
+        #F_nu = B_nu
         dLnu = 2 * 2*np.pi * F_nu * R_flat[:, np.newaxis]
         Lnu = np.trapz(y=dLnu * np.cos(self.inc), x=R_flat, axis=0)
         
@@ -625,7 +625,7 @@ class CompDisc(Disc):
     However, this is uneccesarily slow - hence the change!
     """
     
-    def __init__(self, r_in, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c):
+    def __init__(self, r_in, r_out, a_star, inc, mdot, M, gamma_c, kTe_c):
         """planck black body radiation
         Initiates class
         Inherits the initiation from disc - only now with two extra parameters
@@ -651,7 +651,7 @@ class CompDisc(Disc):
             Units : keV.
         """
         
-        Disc.__init__(self, r_in, r_out, r_isco, inc, mdot, M, model='AD')
+        Disc.__init__(self, r_in, r_out, a_star, inc, mdot, M, model='AD')
         
         #read new params
         self.gamma_c = gamma_c
@@ -711,7 +711,7 @@ class CompDisc(Disc):
         return T_seed
     
     
-    def _calc_local_spec(self, Lirr):
+    def Calc_spec_nth(self, Lirr):
         """
         Calculated the spectrum at each point on disc
 
@@ -722,7 +722,8 @@ class CompDisc(Disc):
 
         Returns
         -------
-        None.
+        Lnu : 1D-array
+            Comptonsed disc spectrum
 
         """
         Es = (self.nu_grid * u.Hz).to(u.keV, equivalencies=u.spectral()).value
@@ -755,133 +756,105 @@ class CompDisc(Disc):
                 else:
                     fs_r = np.column_stack((fs_r, ph_r_nu))
         
-        return fs_r
+        Lnu = np.trapz(2 * np.cos(self.inc) * fs_r * self.R_grid[0, :], self.R_grid[0, :])
+        return Lnu
     
     
     
-        
-    """
-    Section for calculating and evolving Comptonised spectrum
-    """
-    def Calc_spec(self):
-        Ls = Disc.Calc_spec(self)
-        #COnverting nu to E - as this is required by excTHCOMP
-        Es = (self.nu_grid * u.Hz).to(u.keV, equivalencies=u.spectral()).value
-        
-        Enew, Lnew = thc.do_THCOMP(Ls, Es, 'W/Hz', self.gamma_c, self.kTe_c, z=0)
-        return Enew, Lnew
-    
-    
-    def evolve_spec(self, l_xs, ts, num_nuBin, numCPU):
+    def do_evolve_nth(self, l_xs, ts):
         """
-        Evolves the comptonised spectra according to input X-ray light-curve
-        Note, due to the convolution nature of thcomp can only evolve full 
-        spectrum, rather than single band passes - will hopefully figure
-        out a way round this in future - as entire spectrum is computationally
-        intense and not necesarily relevant!!!
+        Evolves the Comptonised disc according to an input light_curve
 
         Parameters
         ----------
         l_xs : 1D-array
-            See do_evolve().
+            Hard X-ray light_curve - units : F/Fmean.
         ts : 1D-array
-            See do_evolve().
-        numCPU : float
-            Number of CPU cores to use.
-        num_nuBin : float
-            Number of frequency bins to use between nu_min and nu_max. 
-            Set to -1 to use self.nu_grid (note that this will be
-            computationally intense, and impractical for most applications)
+            Corresponding time axis - units : days.
 
         Returns
         -------
-        None.
+        Lnus_all : 2D-array
+            Model light-curve for each frequency/energy in nu_grid
+            units : W/Hz
 
         """
         
-        #Evolving disc spec first
-        Ld, nu_d = self.evolve_fullSpec(l_xs, ts, num_nuBin, numCPU)
-            
+        Lxs = l_xs * self.Lx #array of x-ray lums
+        Lin = np.array([self.Lx]) #array of Ls in play
         
-        E_d = (nu_d * u.Hz).to(u.keV, equivalencies=u.spectral()).value
-        #Convolving thcomp onto each time stamp
+        Lirr = np.ndarray(np.shape(self.tau_grid)) #irradiation array
         for i in tqdm(range(len(ts))):
-            L_current = Ld[i, :]
             
-            Ec, Lc = thc.do_THCOMP(L_current, E_d, 'W/Hz', self.gamma_c, self.kTe_c, z=0)
+            Lin = np.append(Lin, [Lxs[i]])
+            if i == 0:
+                t_delay = np.array([np.inf])
+            else:
+                t_delay += ts[i] - ts[i-1] #Adding time step to delay array
+            
+            t_delay = np.append(t_delay, [0]) #Appending 0 for current emitted
+            
+            #Sorting irradiation array
+            for j in range(len(t_delay)):
+                Lirr[self.tau_grid <= t_delay[j]] = Lin[j]
+            
+            #Calculating model spec for current time-step
+            Lnu_t = self.Calc_spec_nth(Lirr)
             
             if i == 0:
-                L_all = Lc
-                E_all = Ec
+                Lnus_all = Lnu_t
             else:
-                L_all = np.column_stack((L_all, Lc))
-                E_all = np.column_stack((E_all, Ec))
-            
-        return Ec, L_all
+                Lnus_all = np.column_stack((Lnus_all, Lnu_t))
+        
+        return Lnus_all
+    
+    
+    
+    
+
             
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     import time
     
-    r_d = 10
+    r_d = 26.7
     r_out = 400
     a_star = 0
     hx = 10
     inc = 25
-    mdot = 10**(-1.4)
+    mdot = 10**(-1.3)
     M = 2e8
-    gamma_c = 2.1
+    gamma_c = 2.5
     kTe_c = 0.2
     
     
     
     """
-    Testing new warm comp model, and comparing to thcomp model
+    Testing calculation speed of new warm-comp model versus old
     """
+    
+    np.random.seed(123)    
+    lxs = np.random.rand(200) + 0.5
+    ts = np.linspace(0, 200, 200)
+    
     wc_mod = CompDisc(r_d, r_out, a_star, inc, mdot, M, gamma_c, kTe_c)
-    Ts = wc_mod._T_seed(wc_mod.Lx)
+    nu_v = (1928 * u.AA).to(u.Hz, equivalencies=u.spectral()).value
     
-    t1 = time.time()
-    Lds = wc_mod._calc_local_spec(wc_mod.Lx)
-    t2 = time.time()
+
+    print('evolving nthcomp model')
+    t_nth_1 = time.time()
+    Ls_nth = wc_mod.do_evolve_nth(lxs, ts)
+    t_nth_2 = time.time()
+    print('Runtime = {} mins'.format((t_nth_2 - t_nth_1)/60))
     
-    print()
-    print('Runtime = {} s'.format(t2-t1))    
+    idx_nu_nth = np.abs(wc_mod.nu_grid - nu_v).argmin()
+    wc_nth_nu = Ls_nth[idx_nu_nth, :]
     
-    wc_nu = wc_mod.nu_grid
-    for j in range(400):
-        plt.loglog(wc_nu, wc_nu * Lds[:, j]*1e7, ls='-.')
-    
-    Lnu_tot = np.trapz(Lds * wc_mod.R_grid[0, :], wc_mod.R_grid[0, :], axis=-1)
-    
-    #Calculating old model spec for comparison
-    Etest, Ltest = wc_mod.Calc_spec()
-    nutest = (Etest * u.keV).to(u.Hz, equivalencies=u.spectral()).value
-    
-    Ltest = (Ltest * u.W/u.Hz).to(u.erg/u.s/u.Hz).value
-    
-    #Now doing a disc spec - also for comparison
-    ad_mod = Disc(r_d, r_out, a_star, inc, mdot, M, model='AD')
-    ad_spec = ad_mod.Calc_spec()
-    ad_spec = (ad_spec * u.W/u.Hz).to(u.erg/u.s/u.Hz).value
-        
-    plt.loglog(wc_nu, wc_nu*Lnu_tot*1e7, label='nthcomp')
-    plt.loglog(nutest, nutest * Ltest, label='thcomp')
-    plt.loglog(ad_mod.nu_grid, ad_mod.nu_grid * ad_spec, label='ad disc')
-    plt.ylim(1e40, 1e45)
-    
-    plt.legend(frameon=False)
+    plt.plot(ts, lxs)
+    plt.plot(ts, wc_nth_nu/np.mean(wc_nth_nu))
     plt.show()
     
-    
-    Ltot_nth = np.trapz(Lnu_tot*1e7 * np.cos(np.deg2rad(inc)), wc_nu)
-    Ltot_th = np.trapz(Ltest, nutest)
-    Ltot_ad = np.trapz(ad_spec, ad_mod.nu_grid)
-    
-    print()
-    print('NTHCOMP lum = {} erg/s'.format(Ltot_nth))
-    print('THCOMP lum = {} erg/s'.format(Ltot_th))
-    print('AD spec lum = {} erg/s'.format(Ltot_ad))
 
+    
     
