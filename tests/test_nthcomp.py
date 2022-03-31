@@ -36,6 +36,8 @@ ph = normC * ph
 E_xs, ph_xs = np.loadtxt('nthcomp_testres.qdp', skiprows=3, usecols=(0, 2),
                          unpack = True)
 
+ph2 = nt.donthcomp(Es, [1.8, 100, 0.2, 1, 0])
+
 
 fig = plt.figure(figsize=(5, 6))
 grid = plt.GridSpec(3, 1, hspace=0)
@@ -45,6 +47,7 @@ subax = fig.add_subplot(grid[2, :], sharex=ax)
 
 ax.loglog(Es, Es * ph, label='pyNTHCOMP')
 ax.loglog(E_xs, ph_xs, ls='dashed', label='XSPEC NTHCOMP')
+ax.loglog(Es, Es * ph2 * normC)
 ax.set_ylim(1e-3, 10)
 ax.set_xlim(1e-2, 1e4)
 ax.legend(frameon=False)
@@ -61,3 +64,5 @@ subax.set_xlabel('Energy (keV)')
 
 plt.tight_layout()
 plt.show()
+
+

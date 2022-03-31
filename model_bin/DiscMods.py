@@ -60,7 +60,7 @@ class Disc:
     
     """
     Emin = 1e-4 #keV
-    Emax = 0.1 #keV
+    Emax = 10 #keV
     eta = 0.057 #Accretion efficiency for non-spinning BH
     hx = 10 #height of corona
     A = 0.5 #disc albedo
@@ -292,7 +292,6 @@ class Disc:
         L_tr = self.int_power(self.r_in)
         
         Lxr = L_full - L_tr
-        print(Lxr)
         return Lxr
     
     
@@ -513,7 +512,8 @@ class Disc:
         B_nu = ((2*h*self.nu_grid**3)/c**2) * (
             1/(np.exp((h*self.nu_grid)/(k_B * T_tot[:, np.newaxis])) - 1))
         
-        F_nu = np.pi * B_nu
+        #F_nu = np.pi * B_nu
+        F_nu = B_nu
         dLnu = 2 * 2*np.pi * F_nu * R_flat[:, np.newaxis]
         Lnu = np.trapz(y=dLnu * np.cos(self.inc), x=R_flat, axis=0)
         
@@ -537,7 +537,7 @@ class CompDisc(Disc):
     """
     
     def __init__(self, r_in, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c):
-        """
+        """planck black body radiation
         Initiates class
         Inherits the initiation from disc - only now with two extra parameters
 
@@ -570,6 +570,11 @@ class CompDisc(Disc):
     
     
     
+    """
+    Section for calculating local disc properties. These evolve in time, so 
+    will be re-calculated at each step in a light-curve
+    """
+    
     def _L_local(self, Tseed):
         """
         Calculates the local luminosity for a point/points on the disc
@@ -579,21 +584,93 @@ class CompDisc(Disc):
         
         Parameters
         ----------
-        Tseed : float or array
+        Tseed : float OR 2D-array
             Temperature of seed photons at point of calculation.
+
+        Returns
+        -------
+        L_loc : float OR 2D-array
+            Local luminosity of point(s) on disc
+
+        """
+        
+        L_loc = sigma * Tseed**4
+        return L_loc
+    
+    
+    def _T_seed(self, Lirr):
+        """
+        Calculates seed photon temperature across the disc
+
+        Parameters
+        ----------
+        Lirr : float OR 2D-array
+            Lumnosity of central X-ray source - as seen by point on disc.
+
+        Returns
+        -------
+        T_seed : 2D-array
+            Local seed/disc temperature across disc
+
+        """
+        Trep = self.T_rep(Lirr)
+        #Applying mask below truncation radius
+        Trep = np.ma.masked_where(self.d_mask, Trep)
+        Tint = np.ma.masked_where(self.d_mask, self.Td)
+        
+        T_seed = (Trep**4 + Tint**4)**(1/4)
+        return T_seed
+    
+    
+    def _calc_local_spec(self, Lirr):
+        """
+        Calculated the spectrum at each point on disc
+
+        Parameters
+        ----------
+        Lirr : float OR 2D-array
+            Lumnosity of central X-ray source - as seen by point on disc.
 
         Returns
         -------
         None.
 
         """
-        return
+        Es = (self.nu_grid * u.Hz).to(u.keV, equivalencies=u.spectral()).value
+        Ts = self._T_seed(Lirr)
+        Ts_r = np.mean(Ts, axis=0)
         
+        Lloc = self._L_local(Ts)
+        Lloc_r = np.trapz(Lloc, self.phi_grid[:, 0], axis=0)
         
+        Ts_r_kev = (Ts_r * k_B)/(Ce * 1000) #shifting to kev
+        for i in range(len(self.R_grid[0, :])):
+            
+            if np.isscalar(Ts_r_kev[i]):
+                ph_r = donthcomp(Es, [self.gamma_c, self.kTe_c, Ts_r_kev[i], 1, 0])
+                normR = Lloc_r[i]/np.trapz(ph_r, Es)
+                ph_r = normR * ph_r
+                ph_r_nu = (ph_r * u.W/u.keV).to(u.W/u.Hz, 
+                                            equivalencies=u.spectral()).value
+                if i == 0:
+                    fs_r = ph_r_nu
+                else:
+                    fs_r = np.column_stack((fs_r, ph_r_nu))
+            
+            else:
+                ph_r_nu = np.zeros(len(Es))
+                ph_r_nu = np.ma.masked_where(ph_r_nu==0, ph_r_nu)
+                
+                if i == 0:
+                    fs_r = ph_r_nu
+                else:
+                    fs_r = np.column_stack((fs_r, ph_r_nu))
         
+        return fs_r
     
     
     
+        
     """
     Section for calculating and evolving Comptonised spectrum
     """
@@ -635,7 +712,6 @@ class CompDisc(Disc):
         
         #Evolving disc spec first
         Ld, nu_d = self.evolve_fullSpec(l_xs, ts, num_nuBin, numCPU)
-        print(np.shape(Ld))
             
         
         E_d = (nu_d * u.Hz).to(u.keV, equivalencies=u.spectral()).value
@@ -657,101 +733,66 @@ class CompDisc(Disc):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
+    import time
     
-    #r_d = 10.546530569328386
-    #r_d = 13.85
-    r_d = 255
-    #r_out = 392.56353894425473
-    #r_out = 5470
-    r_out = 5030
+    r_d = 10
+    r_out = 400
     r_isco = 6
     hx = 10
-    #inc = 7.02
-    inc = 79.5
+    inc = 25
     mdot = 10**(-1.4)
-    eta = 0.1
     M = 2e8
-    
-    rdi =26.7
-    roi = 400
-    inci = 20
-    
-    #Testing Disc object
-    
-    #sp1 = Disc(6, r_out, r_isco, inc, mdot, M, model='AD')
-    sp2 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
-    sp3 = Disc(rdi, roi, r_isco, inci, mdot, M, model='AD')
-    #sp3 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='DD')
-    #print(sp1.Lx, sp2.Lx, sp3.Lx)
+    gamma_c = 2.1
+    kTe_c = 0.2
     
     
-    ts_test = np.array([0, 1, 2, 3, 4])
-    xlfrac = np.array([1, 1.2, 1.3, 1.1, 0.8])
-    nus = np.array([1e14, 1e15, 1e13])
     
+    """
+    Testing new warm comp model, and comparing to thcomp model
+    """
+    wc_mod = CompDisc(r_d, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c)
+    Ts = wc_mod._T_seed(wc_mod.Lx)
     
-    lm = sp2.multi_evolve(nus, xlfrac, ts_test, 3)
-    print(np.shape(lm[:, 0]))
-    m = np.mean(lm[0])
-    if m == 0:
-        print('yes')
-
-    #examining the spectra
-    #s_fullDisc = sp1.Calc_spec()
-    s_truncDisc = sp2.Calc_spec()
-    s_darkDisc = sp3.Calc_spec()
-    nus = sp2.nu_grid
-
-    #Converting to erg
-    #s_fd = (s_fullDisc * u.W).to(u.erg/u.s).value
-    s_td = (s_truncDisc * u.W).to(u.erg/u.s).value
-    s_dd = (s_darkDisc * u.W).to(u.erg/u.s).value
+    t1 = time.time()
+    Lds = wc_mod._calc_local_spec(wc_mod.Lx)
+    t2 = time.time()
     
-    #plt.loglog(nus, nus * s_fd, label='AD r_isco')
-    plt.loglog(nus, nus * s_td, label='AD r_tr=25')
-    plt.loglog(nus, nus * s_dd, label='dark AD r_d=25')
+    print()
+    print('Runtime = {} s'.format(t2-t1))    
     
-    #plt.ylim(1e43, 1e45)
+    wc_nu = wc_mod.nu_grid
+    for j in range(400):
+        plt.loglog(wc_nu, wc_nu * Lds[:, j]*1e7, ls='-.')
+    
+    Lnu_tot = np.trapz(Lds * wc_mod.R_grid[0, :], wc_mod.R_grid[0, :], axis=-1)
+    
+    #Calculating old model spec for comparison
+    Etest, Ltest = wc_mod.Calc_spec()
+    nutest = (Etest * u.keV).to(u.Hz, equivalencies=u.spectral()).value
+    
+    Ltest = (Ltest * u.W/u.Hz).to(u.erg/u.s/u.Hz).value
+    
+    #Now doing a disc spec - also for comparison
+    ad_mod = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
+    ad_spec = ad_mod.Calc_spec()
+    ad_spec = (ad_spec * u.W/u.Hz).to(u.erg/u.s/u.Hz).value
+        
+    plt.loglog(wc_nu, wc_nu*Lnu_tot*1e7, label='nthcomp')
+    plt.loglog(nutest, nutest * Ltest, label='thcomp')
+    plt.loglog(ad_mod.nu_grid, ad_mod.nu_grid * ad_spec, label='ad disc')
     plt.ylim(1e40, 1e45)
-    plt.xlim(6e13, 2e16)
     
-    plt.ylabel(r'$\nu F_{\nu}$   erg/s')
-    plt.xlabel(r'$\nu$   Hz')
+    plt.legend(frameon=False)
+    plt.show()
     
-    #Indicating bands used for obs
-    bands = np.array(['UVW2', 'UVM2', 'UVW1', 'U', 'B', 'V'])
-    wvl = np.array([1928, 2246, 2600, 3465, 4392, 5468])
-    nus_b = (wvl * u.AA).to(u.Hz, equivalencies=u.spectral()).value
+    
+    Ltot_nth = np.trapz(Lnu_tot*1e7 * np.cos(np.deg2rad(inc)), wc_nu)
+    Ltot_th = np.trapz(Ltest, nutest)
+    Ltot_ad = np.trapz(ad_spec, ad_mod.nu_grid)
+    
+    print()
+    print('NTHCOMP lum = {} erg/s'.format(Ltot_nth))
+    print('THCOMP lum = {} erg/s'.format(Ltot_th))
+    print('AD spec lum = {} erg/s'.format(Ltot_ad))
 
-    for n in range(len(bands)):
-        plt.axvline(nus_b[n], ls='dotted')
-    
-    
-    plt.legend()
-    plt.show()
-    
-    
-    """
-    
-    #Testing Comptonised disc object
-    gamma_c = 1.7
-    kTe_c = 1
-    
-    wcd = CompDisc(r_d, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c)
-    
-    Ec, lc = wcd.Calc_spec()
-    
-    plt.loglog(Ec, Ec * lc)
-    plt.ylim(1e18, 1e22)
-    plt.show()
-    
-    et, lct = wcd.evolve_spec(xlfrac, ts_test, 2, 1)
-    print(et)
-    print(np.shape(lct))
-    for k in range(len(ts_test)):
-        plt.loglog(et, et * lct[:, k])
-    
-    plt.ylim(1e18, 1e22)
-    plt.show()
-    """
     
