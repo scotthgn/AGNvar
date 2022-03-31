@@ -8,7 +8,8 @@ Created on Wed Feb  2 10:12:25 2022
 
 """
 Creates one of three possible accretion disc objects: Standard disc according
-to Shakura & Sunnyaev (1973), a disc with some darkening radius, and a 
+to Shakura & Sunnyaev (1973) with a Novikov-Thorne temperature profile
+(Novikov & Thorne 1973), a disc with some darkening radius, and a 
 Comptonised disc.
 Includes methods for creating both spectra, and evolving the light-curve of 
 a single model component
@@ -61,13 +62,12 @@ class Disc:
     """
     Emin = 1e-4 #keV
     Emax = 10 #keV
-    eta = 0.057 #Accretion efficiency for non-spinning BH
     hx = 10 #height of corona
-    A = 0.5 #disc albedo
+    A = 0.3 #disc albedo - fixed same as in AGNSED
     numR = 400 #Nr of gridpoints in R
     numphi = 400 #Nr of gridpoints in phi
     
-    def __init__(self, r_in, r_out, r_isco, inc, mdot, M, model='AD'):
+    def __init__(self, r_in, r_out, a_star, inc, mdot, M, model='AD'):
         """
         Initiates spec object
 
@@ -77,8 +77,9 @@ class Disc:
             Inner radius of disc - units : Rg.
         r_out : float
             Outer disc radius - units : Rg.
-        r_isco : float
-            Inner most stable circular orbit (depends on a) - units : Rg.
+        a_star : float
+            Dimensionless spin parameter. +ve for prograde rotation, 
+            -ve for retrograde - range [-1, 1].
         inc : float
             System inclination - units : deg.
         mdot : float
@@ -93,21 +94,28 @@ class Disc:
         #Read params
         self.r_in = r_in
         self.r_out = r_out
-        self.r_isco = r_isco
+        self.a = a_star
         self.inc = np.deg2rad(inc)
         self.mdot = mdot
         self.M = M
         self.mod = model
+        
+        
+        #Calculating disc params
+        self._calc_Ledd() #eddington luminosity
+        self._calc_risco() #innermost stable curcular orbit
+        self._calc_efficiency() #accretion efficiency
         
         #Performing checks
         self._check_mod()
         self._check_inc()
         self._check_risco()
         self._check_rlims()
+        
 
         #Conversion factors to physical units
         self.Rg = (G*self.M)/c**2 #Grav radius for this system in meters
-        self.Mdot_edd = (4*np.pi*G*self.M*mp)/(self.eta*sigmaT*c)
+        self.Mdot_edd = self.L_edd/(self.eta * c**2)
         
         
         #Physical units
@@ -187,6 +195,84 @@ class Disc:
     
     
     """
+    Section for calculating disc parameters. i.e r_isco, effeiciency eta,
+    NT-parameters, delay surface, etc
+    
+    """
+    def _calc_Ledd(self):
+        """
+        Caclulate eddington Luminosity
+        """
+        Ledd = (4 * np.pi * G * self.M * mp * c)/sigmaT
+        self.L_edd = Ledd
+    
+    
+    def _calc_risco(self):
+        """
+        Calculating innermost stable circular orbit for a spinning
+        black hole. Follows Page and Thorne (1974). Note, can also be reffered
+        to as r_ms, for marginally stable orbit
+        
+        return r_isco as property - so will be called in __init__
+
+        """
+        Z1 = 1 + (1 - self.a**2)**(1/3) * (
+            (1 + self.a)**(1/3) + (1 - self.a)**(1/3))
+        Z2 = np.sqrt(3 * self.a**2 + Z1**2)
+
+        self.r_isco = 3 + Z2 - np.sign(self.a) * np.sqrt(
+            (3 - Z1) * (3 + Z1 + 2*Z2))
+
+    
+    
+    def _calc_efficiency(self):
+        """
+        Calculates the accretion efficiency eta, s.t L_bol = eta Mdot c^2
+        Using the GR case, where eta = 1 - sqrt(1 - 2/(3 r_isco)) 
+            Taken from: The Physcis and Evolution of Active Galactic Nuceli,
+            H. Netzer, 2013, p.38
+        
+        Note to self!: When I derive this in Newtonian limit I get
+        eta = 1/(2 r_isco). Not entirely sure how to derive the GR version.
+        Should ask Chris at next meeting!!!!
+
+        """
+        
+        self.eta = 1 - np.sqrt(1 - 2/(3*self.r_isco))
+    
+    
+    def _calc_NTparams(self, r):
+        """
+        Calculates the Novikov-Thorne relativistic factors.
+        see Active Galactic Nuclei, J. H. Krolik, p.151-154
+        and Page & Thorne (1974)
+
+        """
+        y = np.sqrt(r)
+        y_isc = np.sqrt(self.r_isco)
+        y1 = 2 * np.cos((1/3) * np.arccos(self.a) - (np.pi/3))
+        y2 = 2 * np.cos((1/3) * np.arccos(self.a) + (np.pi/3))
+        y3 = -2 * np.cos((1/3) * np.arccos(self.a))
+
+        
+        B = 1 - (3/r) + ((2 * self.a)/(r**(3/2)))
+        
+        C1 = 1 - (y_isc/y) - ((3 * self.a)/(2 * y)) * np.log(y/y_isc)
+        
+        C2 = ((3 * (y1 - self.a)**2)/(y*y1 * (y1 - y2) * (y1 - y3))) * np.log(
+            (y - y1)/(y_isc - y1))
+        C2 += ((3 * (y2 - self.a)**2)/(y*y2 * (y2 - y1) * (y2 - y3))) * np.log(
+            (y - y2)/(y_isc - y1))
+        C2 += ((3 * (y3 - self.a)**2)/(y*y3 * (y3 - y1) * (y3 - y2))) * np.log(
+            (y - y3)/(y_isc - y3))
+        
+        C = C1 - C2
+        
+        return C/B
+    
+    
+    
+    """
     Now onto the acutal model
     """
     
@@ -209,8 +295,11 @@ class Disc:
     
     def T_int(self):
        
-        T4 = ((3*G*self.M*self.Mdot)/(8*np.pi*sigma*self.R_grid**3)) * (
-            1 - np.sqrt(self.R_isco/self.R_grid))  
+        Rt = self._calc_NTparams(self.R_grid/self.Rg)
+        const_fac = (3 * G * self.M * self.mdot * self.Mdot_edd)/(
+            8 * np.pi * sigma * (self.R_grid)**3)
+        
+        T4 = const_fac * Rt 
         
         return T4**(1/4)
     
@@ -737,7 +826,7 @@ if __name__ == '__main__':
     
     r_d = 10
     r_out = 400
-    r_isco = 6
+    a_star = 0
     hx = 10
     inc = 25
     mdot = 10**(-1.4)
@@ -750,7 +839,7 @@ if __name__ == '__main__':
     """
     Testing new warm comp model, and comparing to thcomp model
     """
-    wc_mod = CompDisc(r_d, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c)
+    wc_mod = CompDisc(r_d, r_out, a_star, inc, mdot, M, gamma_c, kTe_c)
     Ts = wc_mod._T_seed(wc_mod.Lx)
     
     t1 = time.time()
@@ -773,7 +862,7 @@ if __name__ == '__main__':
     Ltest = (Ltest * u.W/u.Hz).to(u.erg/u.s/u.Hz).value
     
     #Now doing a disc spec - also for comparison
-    ad_mod = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
+    ad_mod = Disc(r_d, r_out, a_star, inc, mdot, M, model='AD')
     ad_spec = ad_mod.Calc_spec()
     ad_spec = (ad_spec * u.W/u.Hz).to(u.erg/u.s/u.Hz).value
         
