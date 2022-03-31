@@ -8,7 +8,8 @@ Created on Wed Feb  2 10:12:25 2022
 
 """
 Creates one of three possible accretion disc objects: Standard disc according
-to Shakura & Sunnyaev (1973), a disc with some darkening radius, and a 
+to Shakura & Sunnyaev (1973) with a Novikov-Thorne temperature profile
+(Novikov & Thorne 1973), a disc with some darkening radius, and a 
 Comptonised disc.
 Includes methods for creating both spectra, and evolving the light-curve of 
 a single model component
@@ -16,25 +17,28 @@ a single model component
 
 import numpy as np
 import astropy.units as u
+import astropy.constants as constants
 from functools import partial
 from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
 import excTHCOMP as thc
+from pyNTHCOMP import donthcomp
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
 
 
 """Usefull constants"""
-h = 6.63e-34 #Js - Planck constant
-G = 6.67e-11 * 1.99e+30 #m^3/(M_sol^1 s^2) - Gravitational constant
-sigma = 5.67e-8 #W/m^2K^4 - Stefan-Boltzmann constant
-k_B = 1.38e-23 #J/K - Boltzmann constant
-c = 3e+8 #m/s - Speed of light
-mp = 1.67e-27 #kg - Proton mass
-sigmaT = 6.653e-29 #m^-2 - Thomson cross section
-Ce = 1.6e-19 #C - elementary charge
+h = constants.h.value #Js - Planck constant
+G = constants.G.value * constants.M_sun.value #m^3/(M_sol^1 s^2) - Gravitational constant
+sigma = constants.sigma_sb.value #W/m^2K^4 - Stefan-Boltzmann constant
+k_B = constants.k_B.value #J/K - Boltzmann constant
+c = constants.c.value #m/s - Speed of light
+mp = constants.m_p.value #kg - Proton mass
+sigmaT = constants.sigma_T.value #m^-2 - Thomson cross section
+Ce = constants.e.value #C - elementary charge
+
 
 
 
@@ -57,14 +61,13 @@ class Disc:
     
     """
     Emin = 1e-4 #keV
-    Emax = 0.1 #keV
-    eta = 0.057 #Accretion efficiency
+    Emax = 10 #keV
     hx = 10 #height of corona
-    A = 0.5 #disc albedo
+    A = 0.3 #disc albedo - fixed same as in AGNSED
     numR = 400 #Nr of gridpoints in R
     numphi = 400 #Nr of gridpoints in phi
     
-    def __init__(self, r_in, r_out, r_isco, inc, mdot, M, model='AD'):
+    def __init__(self, r_in, r_out, a_star, inc, mdot, M, model='AD'):
         """
         Initiates spec object
 
@@ -74,8 +77,9 @@ class Disc:
             Inner radius of disc - units : Rg.
         r_out : float
             Outer disc radius - units : Rg.
-        r_isco : float
-            Inner most stable circular orbit (depends on a) - units : Rg.
+        a_star : float
+            Dimensionless spin parameter. +ve for prograde rotation, 
+            -ve for retrograde - range [-1, 1].
         inc : float
             System inclination - units : deg.
         mdot : float
@@ -90,21 +94,28 @@ class Disc:
         #Read params
         self.r_in = r_in
         self.r_out = r_out
-        self.r_isco = r_isco
+        self.a = a_star
         self.inc = np.deg2rad(inc)
         self.mdot = mdot
         self.M = M
         self.mod = model
+        
+        
+        #Calculating disc params
+        self._calc_Ledd() #eddington luminosity
+        self._calc_risco() #innermost stable curcular orbit
+        self._calc_efficiency() #accretion efficiency
         
         #Performing checks
         self._check_mod()
         self._check_inc()
         self._check_risco()
         self._check_rlims()
+        
 
         #Conversion factors to physical units
         self.Rg = (G*self.M)/c**2 #Grav radius for this system in meters
-        self.Mdot_edd = (4*np.pi*G*self.M*mp)/(self.eta*sigmaT*c)
+        self.Mdot_edd = self.L_edd/(self.eta * c**2)
         
         
         #Physical units
@@ -184,6 +195,84 @@ class Disc:
     
     
     """
+    Section for calculating disc parameters. i.e r_isco, effeiciency eta,
+    NT-parameters, delay surface, etc
+    
+    """
+    def _calc_Ledd(self):
+        """
+        Caclulate eddington Luminosity
+        """
+        Ledd = (4 * np.pi * G * self.M * mp * c)/sigmaT
+        self.L_edd = Ledd
+    
+    
+    def _calc_risco(self):
+        """
+        Calculating innermost stable circular orbit for a spinning
+        black hole. Follows Page and Thorne (1974). Note, can also be reffered
+        to as r_ms, for marginally stable orbit
+        
+        return r_isco as property - so will be called in __init__
+
+        """
+        Z1 = 1 + (1 - self.a**2)**(1/3) * (
+            (1 + self.a)**(1/3) + (1 - self.a)**(1/3))
+        Z2 = np.sqrt(3 * self.a**2 + Z1**2)
+
+        self.r_isco = 3 + Z2 - np.sign(self.a) * np.sqrt(
+            (3 - Z1) * (3 + Z1 + 2*Z2))
+
+    
+    
+    def _calc_efficiency(self):
+        """
+        Calculates the accretion efficiency eta, s.t L_bol = eta Mdot c^2
+        Using the GR case, where eta = 1 - sqrt(1 - 2/(3 r_isco)) 
+            Taken from: The Physcis and Evolution of Active Galactic Nuceli,
+            H. Netzer, 2013, p.38
+        
+        Note to self!: When I derive this in Newtonian limit I get
+        eta = 1/(2 r_isco). Not entirely sure how to derive the GR version.
+        Should ask Chris at next meeting!!!!
+
+        """
+        
+        self.eta = 1 - np.sqrt(1 - 2/(3*self.r_isco))
+    
+    
+    def _calc_NTparams(self, r):
+        """
+        Calculates the Novikov-Thorne relativistic factors.
+        see Active Galactic Nuclei, J. H. Krolik, p.151-154
+        and Page & Thorne (1974)
+
+        """
+        y = np.sqrt(r)
+        y_isc = np.sqrt(self.r_isco)
+        y1 = 2 * np.cos((1/3) * np.arccos(self.a) - (np.pi/3))
+        y2 = 2 * np.cos((1/3) * np.arccos(self.a) + (np.pi/3))
+        y3 = -2 * np.cos((1/3) * np.arccos(self.a))
+
+        
+        B = 1 - (3/r) + ((2 * self.a)/(r**(3/2)))
+        
+        C1 = 1 - (y_isc/y) - ((3 * self.a)/(2 * y)) * np.log(y/y_isc)
+        
+        C2 = ((3 * (y1 - self.a)**2)/(y*y1 * (y1 - y2) * (y1 - y3))) * np.log(
+            (y - y1)/(y_isc - y1))
+        C2 += ((3 * (y2 - self.a)**2)/(y*y2 * (y2 - y1) * (y2 - y3))) * np.log(
+            (y - y2)/(y_isc - y1))
+        C2 += ((3 * (y3 - self.a)**2)/(y*y3 * (y3 - y1) * (y3 - y2))) * np.log(
+            (y - y3)/(y_isc - y3))
+        
+        C = C1 - C2
+        
+        return C/B
+    
+    
+    
+    """
     Now onto the acutal model
     """
     
@@ -206,8 +295,11 @@ class Disc:
     
     def T_int(self):
        
-        T4 = ((3*G*self.M*self.Mdot)/(8*np.pi*sigma*self.R_grid**3)) * (
-            1 - np.sqrt(self.R_isco/self.R_grid))  
+        Rt = self._calc_NTparams(self.R_grid/self.Rg)
+        const_fac = (3 * G * self.M * self.mdot * self.Mdot_edd)/(
+            8 * np.pi * sigma * (self.R_grid)**3)
+        
+        T4 = const_fac * Rt 
         
         return T4**(1/4)
     
@@ -289,7 +381,6 @@ class Disc:
         L_tr = self.int_power(self.r_in)
         
         Lxr = L_full - L_tr
-        print(Lxr)
         return Lxr
     
     
@@ -510,7 +601,8 @@ class Disc:
         B_nu = ((2*h*self.nu_grid**3)/c**2) * (
             1/(np.exp((h*self.nu_grid)/(k_B * T_tot[:, np.newaxis])) - 1))
         
-        F_nu = np.pi * B_nu
+        #F_nu = np.pi * B_nu
+        F_nu = B_nu
         dLnu = 2 * 2*np.pi * F_nu * R_flat[:, np.newaxis]
         Lnu = np.trapz(y=dLnu * np.cos(self.inc), x=R_flat, axis=0)
         
@@ -523,13 +615,18 @@ class Disc:
 
 class CompDisc(Disc):
     """
-    A comptonised accretion disc. Calculates spectra according to AD model
-    in Disc - then excecutes THCOMP (Zdziarski et al. 2020) to calculate
-    the Comptonised spectrum
+    A comptonised accretion disc. Calculates the seed photons as a black-body
+    from a disc, then uses pyNTHCOMP; python version of the XSPEC model NTHCOMP
+    (Zdziarski, Johnson & Magdziarz, 1996; Zycki, Done & Smith, 1999). Adapted 
+    by Thomas et al. 2016.
+    
+    Note! A previous version of the code calculated the entire disc spectrum, 
+    and then convolved it with THCOMP to calculate the Comptonised spectrum. 
+    However, this is uneccesarily slow - hence the change!
     """
     
     def __init__(self, r_in, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c):
-        """
+        """planck black body radiation
         Initiates class
         Inherits the initiation from disc - only now with two extra parameters
 
@@ -561,6 +658,108 @@ class CompDisc(Disc):
         self.kTe_c = kTe_c
     
     
+    
+    """
+    Section for calculating local disc properties. These evolve in time, so 
+    will be re-calculated at each step in a light-curve
+    """
+    
+    def _L_local(self, Tseed):
+        """
+        Calculates the local luminosity for a point/points on the disc
+        Ued for normalising the resulting COmptonised spectrum from NTHCOMP
+        
+        Assumes dL = \sigma_SB T^4
+        
+        Parameters
+        ----------
+        Tseed : float OR 2D-array
+            Temperature of seed photons at point of calculation.
+
+        Returns
+        -------
+        L_loc : float OR 2D-array
+            Local luminosity of point(s) on disc
+
+        """
+        
+        L_loc = sigma * Tseed**4
+        return L_loc
+    
+    
+    def _T_seed(self, Lirr):
+        """
+        Calculates seed photon temperature across the disc
+
+        Parameters
+        ----------
+        Lirr : float OR 2D-array
+            Lumnosity of central X-ray source - as seen by point on disc.
+
+        Returns
+        -------
+        T_seed : 2D-array
+            Local seed/disc temperature across disc
+
+        """
+        Trep = self.T_rep(Lirr)
+        #Applying mask below truncation radius
+        Trep = np.ma.masked_where(self.d_mask, Trep)
+        Tint = np.ma.masked_where(self.d_mask, self.Td)
+        
+        T_seed = (Trep**4 + Tint**4)**(1/4)
+        return T_seed
+    
+    
+    def _calc_local_spec(self, Lirr):
+        """
+        Calculated the spectrum at each point on disc
+
+        Parameters
+        ----------
+        Lirr : float OR 2D-array
+            Lumnosity of central X-ray source - as seen by point on disc.
+
+        Returns
+        -------
+        None.
+
+        """
+        Es = (self.nu_grid * u.Hz).to(u.keV, equivalencies=u.spectral()).value
+        Ts = self._T_seed(Lirr)
+        Ts_r = np.mean(Ts, axis=0)
+        
+        Lloc = self._L_local(Ts)
+        Lloc_r = np.trapz(Lloc, self.phi_grid[:, 0], axis=0)
+        
+        Ts_r_kev = (Ts_r * k_B)/(Ce * 1000) #shifting to kev
+        for i in range(len(self.R_grid[0, :])):
+            
+            if np.isscalar(Ts_r_kev[i]):
+                ph_r = donthcomp(Es, [self.gamma_c, self.kTe_c, Ts_r_kev[i], 1, 0])
+                normR = Lloc_r[i]/np.trapz(ph_r, Es)
+                ph_r = normR * ph_r
+                ph_r_nu = (ph_r * u.W/u.keV).to(u.W/u.Hz, 
+                                            equivalencies=u.spectral()).value
+                if i == 0:
+                    fs_r = ph_r_nu
+                else:
+                    fs_r = np.column_stack((fs_r, ph_r_nu))
+            
+            else:
+                ph_r_nu = np.zeros(len(Es))
+                ph_r_nu = np.ma.masked_where(ph_r_nu==0, ph_r_nu)
+                
+                if i == 0:
+                    fs_r = ph_r_nu
+                else:
+                    fs_r = np.column_stack((fs_r, ph_r_nu))
+        
+        return fs_r
+    
+    
+    
+        
     """
     Section for calculating and evolving Comptonised spectrum
     """
@@ -602,7 +801,6 @@ class CompDisc(Disc):
         
         #Evolving disc spec first
         Ld, nu_d = self.evolve_fullSpec(l_xs, ts, num_nuBin, numCPU)
-        print(np.shape(Ld))
             
         
         E_d = (nu_d * u.Hz).to(u.keV, equivalencies=u.spectral()).value
@@ -624,99 +822,66 @@ class CompDisc(Disc):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
+    import time
     
-    #r_d = 10.546530569328386
-    #r_d = 13.85
-    r_d = 255
-    #r_out = 392.56353894425473
-    #r_out = 5470
-    r_out = 5030
-    r_isco = 6
+    r_d = 10
+    r_out = 400
+    a_star = 0
     hx = 10
-    #inc = 7.02
-    inc = 79.5
+    inc = 25
     mdot = 10**(-1.4)
-    eta = 0.1
     M = 2e8
+    gamma_c = 2.1
+    kTe_c = 0.2
     
-    rdi =26.7
-    roi = 400
-    inci = 20
     
-    #Testing Disc object
+    
     """
-    #sp1 = Disc(6, r_out, r_isco, inc, mdot, M, model='AD')
-    sp2 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='AD')
-    sp3 = Disc(rdi, roi, r_isco, inci, mdot, M, model='AD')
-    #sp3 = Disc(r_d, r_out, r_isco, inc, mdot, M, model='DD')
-    #print(sp1.Lx, sp2.Lx, sp3.Lx)
+    Testing new warm comp model, and comparing to thcomp model
+    """
+    wc_mod = CompDisc(r_d, r_out, a_star, inc, mdot, M, gamma_c, kTe_c)
+    Ts = wc_mod._T_seed(wc_mod.Lx)
     
+    t1 = time.time()
+    Lds = wc_mod._calc_local_spec(wc_mod.Lx)
+    t2 = time.time()
     
-    ts_test = np.array([0, 1, 2, 3, 4])
-    xlfrac = np.array([1, 1.2, 1.3, 1.1, 0.8])
-    nus = np.array([1e14, 1e15, 1e13])
+    print()
+    print('Runtime = {} s'.format(t2-t1))    
     
+    wc_nu = wc_mod.nu_grid
+    for j in range(400):
+        plt.loglog(wc_nu, wc_nu * Lds[:, j]*1e7, ls='-.')
     
-    lm = sp2.multi_evolve(nus, xlfrac, ts_test, 3)
-    print(np.shape(lm[:, 0]))
-    m = np.mean(lm[0])
-    if m == 0:
-        print('yes')
-
-    #examining the spectra
-    #s_fullDisc = sp1.Calc_spec()
-    s_truncDisc = sp2.Calc_spec()
-    s_darkDisc = sp3.Calc_spec()
-    nus = sp2.nu_grid
-
-    #Converting to erg
-    #s_fd = (s_fullDisc * u.W).to(u.erg/u.s).value
-    s_td = (s_truncDisc * u.W).to(u.erg/u.s).value
-    s_dd = (s_darkDisc * u.W).to(u.erg/u.s).value
+    Lnu_tot = np.trapz(Lds * wc_mod.R_grid[0, :], wc_mod.R_grid[0, :], axis=-1)
     
-    #plt.loglog(nus, nus * s_fd, label='AD r_isco')
-    plt.loglog(nus, nus * s_td, label='AD r_tr=25')
-    plt.loglog(nus, nus * s_dd, label='dark AD r_d=25')
+    #Calculating old model spec for comparison
+    Etest, Ltest = wc_mod.Calc_spec()
+    nutest = (Etest * u.keV).to(u.Hz, equivalencies=u.spectral()).value
     
-    #plt.ylim(1e43, 1e45)
+    Ltest = (Ltest * u.W/u.Hz).to(u.erg/u.s/u.Hz).value
+    
+    #Now doing a disc spec - also for comparison
+    ad_mod = Disc(r_d, r_out, a_star, inc, mdot, M, model='AD')
+    ad_spec = ad_mod.Calc_spec()
+    ad_spec = (ad_spec * u.W/u.Hz).to(u.erg/u.s/u.Hz).value
+        
+    plt.loglog(wc_nu, wc_nu*Lnu_tot*1e7, label='nthcomp')
+    plt.loglog(nutest, nutest * Ltest, label='thcomp')
+    plt.loglog(ad_mod.nu_grid, ad_mod.nu_grid * ad_spec, label='ad disc')
     plt.ylim(1e40, 1e45)
-    plt.xlim(6e13, 2e16)
     
-    plt.ylabel(r'$\nu F_{\nu}$   erg/s')
-    plt.xlabel(r'$\nu$   Hz')
+    plt.legend(frameon=False)
+    plt.show()
     
-    #Indicating bands used for obs
-    bands = np.array(['UVW2', 'UVM2', 'UVW1', 'U', 'B', 'V'])
-    wvl = np.array([1928, 2246, 2600, 3465, 4392, 5468])
-    nus_b = (wvl * u.AA).to(u.Hz, equivalencies=u.spectral()).value
+    
+    Ltot_nth = np.trapz(Lnu_tot*1e7 * np.cos(np.deg2rad(inc)), wc_nu)
+    Ltot_th = np.trapz(Ltest, nutest)
+    Ltot_ad = np.trapz(ad_spec, ad_mod.nu_grid)
+    
+    print()
+    print('NTHCOMP lum = {} erg/s'.format(Ltot_nth))
+    print('THCOMP lum = {} erg/s'.format(Ltot_th))
+    print('AD spec lum = {} erg/s'.format(Ltot_ad))
 
-    for n in range(len(bands)):
-        plt.axvline(nus_b[n], ls='dotted')
-    
-    
-    plt.legend()
-    plt.show()
-    
-    
-    """
-    
-    #Testing Comptonised disc object
-    gamma_c = 1.7
-    kTe_c = 1
-    
-    wcd = CompDisc(r_d, r_out, r_isco, inc, mdot, M, gamma_c, kTe_c)
-    
-    Ec, lc = wcd.Calc_spec()
-    
-    plt.loglog(Ec, Ec * lc)
-    plt.ylim(1e18, 1e22)
-    plt.show()
-    
-    et, lct = wcd.evolve_spec(xlfrac, ts_test, 400, 4)
-    print(np.shape(lct))
-    for k in range(len(ts_test)):
-        plt.loglog(et, et * lct[:, k])
-    
-    plt.ylim(1e18, 1e22)
-    plt.show()
     

@@ -7,7 +7,7 @@ LAB  F
 LAB  T  Current Theoretical Model
 LAB  X  Energy (keV)
 LAB  Y  keV\u2\d (Photons cm\u-2\d s\u-1\d keV\u-1\d)
-R    X1 0.100000001 1000
-R    Y   3.71519988E-3 3.79025006
+R    X1 9.99999975E-5 10000
+R    Y   4.08789981E-3 4.17048979
 LOG  X ON 1
 LOG  Y ON 1
