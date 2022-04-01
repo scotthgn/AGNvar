@@ -22,8 +22,8 @@ from functools import partial
 from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
-import excTHCOMP as thc
-from pyNTHCOMP import donthcomp
+#import excTHCOMP as thc
+from .pyNTHCOMP import donthcomp
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
@@ -67,7 +67,15 @@ class Disc:
     numR = 400 #Nr of gridpoints in R
     numphi = 400 #Nr of gridpoints in phi
     
-    def __init__(self, r_in, r_out, a_star, inc, mdot, M, model='AD'):
+    def __init__(self,
+                 r_in,
+                 r_out,
+                 a_star,
+                 inc,
+                 mdot,
+                 M,
+                 model='AD',
+                 skip_checks=False):
         """
         Initiates spec object
 
@@ -75,6 +83,7 @@ class Disc:
         ----------
         r_in : float
             Inner radius of disc - units : Rg.
+            If == -1 defaults to r_isco
         r_out : float
             Outer disc radius - units : Rg.
             If == -1 defualts to self gravity radius
@@ -108,16 +117,21 @@ class Disc:
         self._calc_efficiency() #accretion efficiency
         self._calc_r_selfGravity() #Self gravity radius
         
+        #Inner radius
+        if self.r_in == -1:
+            self.r_in = self.r_isco
+        
         #outer radius
         if self.r_out == -1:
             self.r_out = self.r_sg
         
         
-        #Performing checks
-        self._check_mod()
-        self._check_inc()
-        self._check_risco()
-        self._check_rlims()
+        if skip_checks == False:
+            #Performing checks
+            self._check_mod()
+            self._check_inc()
+            self._check_risco()
+            self._check_rlims()
         
 
         #Conversion factors to physical units
@@ -188,10 +202,10 @@ class Disc:
             raise AssertionError('r_in < r_isco - Not physically permitted!!')
     
     def _check_rlims(self):
-        if self.r_out >= 2 * self.r_in:
+        if self.r_out >= 1.05 * self.r_in:
             pass
         else:
-            raise AssertionError('r_out < 2*r_in -- WARNING!!! \n'
+            raise AssertionError('r_out < 1.05*r_in -- WARNING!!! \n'
                                  'Insufficient spacing between r_out and r_in \n'
                                  'on grid! - Increase r_out or reduce r_in to \n'
                                  'satisfy this criteria')
@@ -290,6 +304,19 @@ class Disc:
         #See Laor & Netzer 1989 for more details on constraining this parameter
         m9 = self.M/1e9
         self.r_sg = 2150 * m9**(-2/9) * self.mdot**(4/9) * alpha**(2/9)
+    
+    
+    def change_Lx(self, Lx_new):
+        """
+        Update Lx in the case where this is not the first model component,
+        as then the Lx calculated in __init__ will not be correct...
+
+        Parameters
+        ----------
+        Lx_new : float
+            Corrected X-ray power.
+        """
+        self.Lx = Lx_new
     
     
     
@@ -646,7 +673,16 @@ class CompDisc(Disc):
     However, this is uneccesarily slow - hence the change!
     """
     
-    def __init__(self, r_in, r_out, a_star, inc, mdot, M, gamma_c, kTe_c):
+    def __init__(self,
+                 r_in,
+                 r_out,
+                 a_star,
+                 inc,
+                 mdot,
+                 M,
+                 gamma_c,
+                 kTe_c,
+                 skip_checks=False):
         """planck black body radiation
         Initiates class
         Inherits the initiation from disc - only now with two extra parameters
@@ -672,7 +708,8 @@ class CompDisc(Disc):
             Units : keV.
         """
         
-        Disc.__init__(self, r_in, r_out, a_star, inc, mdot, M, model='AD')
+        Disc.__init__(self, r_in, r_out, a_star, inc, mdot, M, model='AD',
+                      skip_checks=skip_checks)
         
         #read new params
         self.gamma_c = gamma_c
@@ -732,9 +769,9 @@ class CompDisc(Disc):
         return T_seed
     
     
-    def Calc_spec_nth(self, Lirr):
+    def Calc_spec(self, Lirr):
         """
-        Calculated the spectrum at each point on disc
+        Calculated the spectrum
 
         Parameters
         ----------
@@ -782,7 +819,7 @@ class CompDisc(Disc):
     
     
     
-    def do_evolve_nth(self, l_xs, ts):
+    def do_evolve(self, l_xs, ts):
         """
         Evolves the Comptonised disc according to an input light_curve
 
