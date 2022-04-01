@@ -1,0 +1,3 @@
+Main source directory for the agn variability code - contains (at least wil
+soon...) all you need to define your AGN geometry, and then caluclate spectra,
+impulse response functions, or generate model light-curves 
