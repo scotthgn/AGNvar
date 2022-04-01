@@ -77,6 +77,7 @@ class Disc:
             Inner radius of disc - units : Rg.
         r_out : float
             Outer disc radius - units : Rg.
+            If == -1 defualts to self gravity radius
         a_star : float
             Dimensionless spin parameter. +ve for prograde rotation, 
             -ve for retrograde - range [-1, 1].
@@ -105,6 +106,12 @@ class Disc:
         self._calc_Ledd() #eddington luminosity
         self._calc_risco() #innermost stable curcular orbit
         self._calc_efficiency() #accretion efficiency
+        self._calc_r_selfGravity() #Self gravity radius
+        
+        #outer radius
+        if self.r_out == -1:
+            self.r_out = self.r_sg
+        
         
         #Performing checks
         self._check_mod()
@@ -269,6 +276,20 @@ class Disc:
         C = C1 - C2
         
         return C/B
+    
+    
+    def _calc_r_selfGravity(self):
+        """
+        Calcultes the self gravity radius according to Laor & Netzer 1989
+        
+        NOTE: Assuming that \alpha=0.1 - in future should figure out how to
+        constrain this properly!!!
+
+        """
+        alpha = 0.1 #assuming turbulence NOT comparable to sound speed
+        #See Laor & Netzer 1989 for more details on constraining this parameter
+        m9 = self.M/1e9
+        self.r_sg = 2150 * m9**(-2/9) * self.mdot**(4/9) * alpha**(2/9)
     
     
     
@@ -830,31 +851,9 @@ if __name__ == '__main__':
     
     
     
-    """
-    Testing calculation speed of new warm-comp model versus old
-    """
+    ad_mod = Disc(r_d, r_out, a_star, inc, mdot, M)
     
-    np.random.seed(123)    
-    lxs = np.random.rand(200) + 0.5
-    ts = np.linspace(0, 200, 200)
-    
-    wc_mod = CompDisc(r_d, r_out, a_star, inc, mdot, M, gamma_c, kTe_c)
-    nu_v = (1928 * u.AA).to(u.Hz, equivalencies=u.spectral()).value
-    
-
-    print('evolving nthcomp model')
-    t_nth_1 = time.time()
-    Ls_nth = wc_mod.do_evolve_nth(lxs, ts)
-    t_nth_2 = time.time()
-    print('Runtime = {} mins'.format((t_nth_2 - t_nth_1)/60))
-    
-    idx_nu_nth = np.abs(wc_mod.nu_grid - nu_v).argmin()
-    wc_nth_nu = Ls_nth[idx_nu_nth, :]
-    
-    plt.plot(ts, lxs)
-    plt.plot(ts, wc_nth_nu/np.mean(wc_nth_nu))
-    plt.show()
-    
+    print(ad_mod.r_sg)
 
     
     
