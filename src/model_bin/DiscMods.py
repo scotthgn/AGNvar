@@ -23,7 +23,7 @@ from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
 #import excTHCOMP as thc
-from .pyNTHCOMP import donthcomp
+from pyNTHCOMP import donthcomp
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
@@ -857,7 +857,7 @@ class CompDisc(Disc):
                 Lirr[self.tau_grid <= t_delay[j]] = Lin[j]
             
             #Calculating model spec for current time-step
-            Lnu_t = self.Calc_spec_nth(Lirr)
+            Lnu_t = self.Calc_spec(Lirr)
             
             if i == 0:
                 Lnus_all = Lnu_t

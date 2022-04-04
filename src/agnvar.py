@@ -217,9 +217,11 @@ class AGN:
         return nus, Lnu_tot
     
     
+    
     """
     Section for calculating impulse response functions
     """
+    
     def IRFcomponents(self, nu, dnu):
         """
         Calculates the impulse response for each disc component for a band
@@ -240,7 +242,38 @@ class AGN:
 
         """
         
-    
+        self.t_imp = np.linspace(0, 8, 200) #Time array for impulse L-curve
+        x_imp = np.full(len(self.t_imp), 1)
+        x_imp[0:2] = 2
+        dt = (self.t_imp[1] - self.t_imp[0])# * 24 * 3600
+        
+        self.irf_comp = {}
+        for i in self.mods:
+            if i == 'AD' or i == 'DD':
+                L_imp = self.mod_dict[i].do_evolve(nu, x_imp, self.t_imp)
+                #L_mean = np.mean(L_imp)
+                L_int = self.mod_dict[i].calc_Lnu(nu, self.Lx)
+                
+                irf_mod = (L_imp/L_int - 1)/(2*dt)  
+                self.irf_comp[i] = irf_mod
+            
+            elif i == 'WC':
+                L_imps = self.mod_dict[i].do_evolve(x_imp, self.t_imp)
+                nus_mod = self.mod_dict[i].nu_grid
+                
+                idx_nu = np.abs(nus_mod - nu).argmin()
+                
+                L_imp = L_imps[idx_nu, :]
+                #L_mean = np.mean(L_imp)
+                
+                L_ints = self.mod_dict[i].Calc_spec(self.Lx)
+                L_int = L_ints[idx_nu]
+                
+                irf_mod = (L_imp/L_int - 1)/(2*dt)
+                self.irf_comp[i] = irf_mod
+        
+        return self.irf_comp
+                
 
 
 
@@ -253,7 +286,7 @@ if __name__ == '__main__':
     inc = 25
     
     mods = ['WC', 'AD']
-    mod_rs = [26, 400, -1]
+    mod_rs = [26, 100, -1]
     
     agn_mod = AGN(M, mdot, a_star, inc, mods, mod_rs, gamma_wc=2.5, kT_wc=0.2,
                   skip_checks=True)
@@ -269,11 +302,39 @@ if __name__ == '__main__':
     
     tot_L = wc_L + ad_L
     
-    plt.loglog(wc_nu, wc_nu * wc_L, color='green', ls='-.')
-    plt.loglog(ad_nu, ad_nu * ad_L, color='red', ls='-.')
-    plt.loglog(ad_nu, ad_nu * tot_L, color='k')
-    plt.loglog(nus, nus*Lnu)
-    plt.ylim(1e35, 1e38)
+    fig = plt.figure(figsize=(10, 6))
+    grid = plt.GridSpec(1, 2, wspace=0.5)
+    
+    spec_ax = fig.add_subplot(grid[:, 0])
+    irf_ax = fig.add_subplot(grid[:, 1])
+        
+    spec_ax.loglog(wc_nu, wc_nu * wc_L * 1e7, color='green', ls='-.', label='Warm Comp.')
+    spec_ax.loglog(ad_nu, ad_nu * ad_L * 1e7, color='red', ls='-.', label='Disc')
+    spec_ax.loglog(ad_nu, ad_nu * tot_L * 1e7, color='k', label='Total')
+    spec_ax.loglog(nus, nus*Lnu)
+    
+    spec_ax.set_ylabel(r'$\nu F_{\nu}$   (ergs/s)')
+    spec_ax.set_xlabel(r'Frequency, $\nu$   (Hz)')
+    spec_ax.set_ylim(1e42, 1e45)
+    spec_ax.legend(frameon=False)
+    spec_ax.axvline(1e15, ls='dotted', color='gray')
+
+    
+    irf_comps = agn_mod.IRFcomponents(1e15, 10)
+    
+    wc_irf = irf_comps['WC']
+    ad_irf = irf_comps['AD']
+    tot_irf = wc_irf + ad_irf
+    
+    irf_ts = agn_mod.t_imp
+    
+    irf_ax.plot(irf_ts, wc_irf, color='green', ls='-.', label='Warm Comp.')
+    irf_ax.plot(irf_ts, ad_irf, color='red', ls='-.', label='Disc')
+    irf_ax.plot(irf_ts, tot_irf, color='k', label='Total')
+    
+    irf_ax.legend(frameon=False)
+    irf_ax.set_ylabel(r'Impulse Response  (for $\nu = 10^{15}$ Hz)')
+    irf_ax.set_xlabel('Delay (days)')
     plt.show()
     
     
