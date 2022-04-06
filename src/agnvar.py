@@ -17,6 +17,7 @@ with the models directly, then have a look in the model_bin!
 
 import numpy as np
 from model_bin.DiscMods import Disc, CompDisc
+from model_bin.ADAFmod import ADAF
 
 
 
@@ -35,6 +36,8 @@ class AGN:
                  mod_rs,
                  gamma_wc=2.1,
                  kT_wc=0.2,
+                 gamma_hc=1.7,
+                 kT_hc=100,
                  skip_checks=False):
         """
         Initiates the AGN object - defines geometry
@@ -66,6 +69,7 @@ class AGN:
                     following Novikov-Thorne, however these are then Compton
                     scattered by a corona above the disc, giving rise to a 
                     Comptonised spectrum.
+                HC - Hot Comptonised corona (or ADAF)
                     
         mod_rs : list
             List containing the radii with which to place each model component.
@@ -88,6 +92,11 @@ class AGN:
         kT_wc : float, OPTIOANL, DEFAULT=0.2
             Electron temperature (high-energy roll over) for warm Compton 
             model - units : keV
+        gamma_hc : float, OPTIONAL, DEFAULT=1.7
+            Photon index for hot Compton model
+        kT_hc : float, OPTIONAL, DEFAULT=100
+            Electron temperature for hot Compton model
+            units : keV
         """
         
         #Read parameters
@@ -97,28 +106,36 @@ class AGN:
         self.inc = inc
         self.gamma_wc = gamma_wc
         self.kT_wc = kT_wc
+        self.gamma_hc = gamma_hc
+        self.kT_hc = kT_hc
         
         self.mods = mods
         self.mod_rs = mod_rs
 
         
         #checking correct number of radii to models
-        self._check_NumRadii()
+        #self._check_NumRadii()
         
         #Initiaing models
         self.mod_dict = {}
         for i in range(len(self.mods)):
             if self.mods[i] == 'AD' or self.mods[i] == 'DD':
-                self.mod_dict[self.mods[i]] = Disc(self.mod_rs[i],
-                            self.mod_rs[i+1], self.a, self.inc,
+                self.mod_dict[self.mods[i]] = Disc(self.mod_rs[1],
+                            self.mod_rs[-1], self.a, self.inc,
                             self.mdot, self.M, model=self.mods[i],
                             skip_checks=skip_checks)
             
             elif self.mods[i] == 'WC':
-                self.mod_dict[self.mods[i]] = CompDisc(self.mod_rs[i], 
-                            self.mod_rs[i+1], self.a, self.inc, 
+                self.mod_dict[self.mods[i]] = CompDisc(self.mod_rs[0], 
+                            self.mod_rs[1], self.a, self.inc, 
                             self.mdot, self.M, self.gamma_wc, self.kT_wc,
                             skip_checks=skip_checks)
+            
+            elif self.mods[i] == 'HC':
+                self.mod_dict[self.mods[i]] = ADAF(self.mod_rs[0], self.M,
+                            self.inc, self.mdot, self.a, self.gamma_hc,
+                            self.kT_hc, self.mod_rs[-1], r_w=self.mods[1],
+                            kT_w=self.kT_wc, gamma_w=self.gamma_wc, seed_type='WC')
         
         
         
@@ -177,8 +194,9 @@ class AGN:
         for i in self.mods:
             #WC is inititalised slightly differently to AD or DD
             if i == 'WC':
-                Lx_mod = self.mod_dict[i].Lx
-                Lnu_mod = self.mod_dict[i].Calc_spec(Lx_mod)
+                #Lx_mod = self.mod_dict[i].Lx
+                Lnu_mod = self.mod_dict[i].Calc_spec(self.Lx)
+                
             else:
                 Lnu_mod = self.mod_dict[i].Calc_spec()
                 
@@ -285,7 +303,7 @@ if __name__ == '__main__':
     a_star = 0
     inc = 25
     
-    mods = ['WC', 'AD']
+    mods = ['HC', 'WC', 'AD']
     mod_rs = [26, 100, -1]
     
     agn_mod = AGN(M, mdot, a_star, inc, mods, mod_rs, gamma_wc=2.5, kT_wc=0.2,
@@ -294,22 +312,25 @@ if __name__ == '__main__':
     spec_comps = agn_mod.SpecComponents()
     nus, Lnu = agn_mod.FullSpec()
     
+    hc_spec = spec_comps['HC']
     wc_spec = spec_comps['WC']
     ad_spec = spec_comps['AD']
     
+    hc_nu, hc_L = hc_spec[:, 0], hc_spec[:, 1]
     wc_nu, wc_L = wc_spec[:, 0], wc_spec[:, 1]
     ad_nu, ad_L = ad_spec[:, 0], ad_spec[:, 1]
     
-    tot_L = wc_L + ad_L
+    tot_L = wc_L + ad_L + hc_L
     
     fig = plt.figure(figsize=(10, 6))
-    grid = plt.GridSpec(1, 2, wspace=0.5)
+    grid = plt.GridSpec(1, 1)#, wspace=0.5)
     
-    spec_ax = fig.add_subplot(grid[:, 0])
-    irf_ax = fig.add_subplot(grid[:, 1])
+    spec_ax = fig.add_subplot(grid[:, :])
+    #irf_ax = fig.add_subplot(grid[:, 1])
         
     spec_ax.loglog(wc_nu, wc_nu * wc_L * 1e7, color='green', ls='-.', label='Warm Comp.')
     spec_ax.loglog(ad_nu, ad_nu * ad_L * 1e7, color='red', ls='-.', label='Disc')
+    spec_ax.loglog(hc_nu, hc_nu * hc_L * 1e7, color='blue', ls='-.', label='Hot Comp')
     spec_ax.loglog(ad_nu, ad_nu * tot_L * 1e7, color='k', label='Total')
     spec_ax.loglog(nus, nus*Lnu)
     
@@ -319,7 +340,7 @@ if __name__ == '__main__':
     spec_ax.legend(frameon=False)
     spec_ax.axvline(1e15, ls='dotted', color='gray')
 
-    
+    """
     irf_comps = agn_mod.IRFcomponents(1e15, 10)
     
     wc_irf = irf_comps['WC']
@@ -336,8 +357,8 @@ if __name__ == '__main__':
     irf_ax.set_ylabel(r'Impulse Response  (for $\nu = 10^{15}$ Hz)')
     irf_ax.set_xlabel('Delay (days)')
     plt.show()
-    
-    
+    """
+    plt.show()
     
     
     

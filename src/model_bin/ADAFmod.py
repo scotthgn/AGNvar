@@ -15,8 +15,22 @@ See Kubota & Done (2018)
 """
 
 import numpy as np
-from pyNTHCOMP import donthcomp
-from DiscMods import Disc, CompDisc
+import astropy.units as u
+import astropy.constants as constants
+from .pyNTHCOMP import donthcomp
+from .DiscMods import Disc, CompDisc
+
+
+"""Usefull constants"""
+h = constants.h.value #Js - Planck constant
+G = constants.G.value * constants.M_sun.value #m^3/(M_sol^1 s^2) - Gravitational constant
+sigma = constants.sigma_sb.value #W/m^2K^4 - Stefan-Boltzmann constant
+k_B = constants.k_B.value #J/K - Boltzmann constant
+c = constants.c.value #m/s - Speed of light
+mp = constants.m_p.value #kg - Proton mass
+sigmaT = constants.sigma_T.value #m^-2 - Thomson cross section
+Ce = constants.e.value #C - elementary charge
+
 
 
 class ADAF(Disc):
@@ -90,15 +104,100 @@ class ADAF(Disc):
         self.gamma_w = gamma_w
         
         
-        #Calculating disc params
-        self._calc_Ledd() #eddington luminosity
-        self._calc_risco() #innermost stable curcular orbit
-        self._calc_efficiency() #accretion efficiency
-        self._calc_r_selfGravity() #Self gravity radius
+        #Initiating Disc - as need seed photon luminosity
+        Disc.__init__(self, r_hot, r_out, a_star, inc, mdot, M, model='AD')
+        
+        #creating warm compton model IF seed type is warm compton...
+        if self.seed_type == 'WC':
+            self.wc_mod = CompDisc(r_hot, r_out, a_star, inc, mdot, M, gamma_w, kT_w)
+            
+        
+        self._T_seed()
+        self._L_seed()
+        
+        
+    """
+    Calculating seed photon parameters - i.e luminosity and temperature
+    """
+    def _T_seed(self):
+        """
+        Calculates seed photon temperature. Assumes typical T is same as 
+        from inner edge of the disc, so T_NT(r_hot) for standard accretion
+        disc or T_NT(r_hot) * exp(y_w), where y_w is Compron y-parameter
+        for the warm comptonisation region (see Kubota & Done 2018)
+        """
+        if self.seed_type == 'AD':
+            #Ehhhm, NO. Fix this - Remeber to mask below r_tr!!
+            T_int = self.Td[0, 0] #Inner disc temperature in K
+            T_irr = self.T_rep(self.Lx)
+            T_irr = T_irr[0, 0]
+            
+            Ts = (T_int**4 + T_irr**4)**(1/4)
+            
+            kTs = k_B * Ts
+            self.kT_seed = (kTs * u.J).to(u.keV).value
+        
+        else:
+            #Using the soft-compton spectrum to estimate temperature,
+            #seeing as don't know optical depth \tau.
+            #Assuming equilibrium temperature given by inverse Compton temp.
+            wc_spec = self.wc_mod.Calc_spec(self.Lx)
+            wc_L = np.trapz(wc_spec, self.nu_grid)
+            wc_E = np.trapz(h*self.nu_grid*wc_spec, self.nu_grid)
+            
+            kT_ic = wc_E/(4 * wc_L)
+            self.kT_seed = (kT_ic * u.J).to(u.keV).value
+    
+    
+    def _L_seed(self):
+        T_int = self.Td
+        T_rep = self.T_rep(self.Lx)
+        
+        T_int = np.ma.masked_where(self.d_mask, T_int)
+        T_rep = np.ma.masked_where(self.d_mask, T_rep)
+        
+        #Flattening since no phi dependence
+        Tint_flat = T_int[0, :]
+        Trep_flat = T_rep[0, :]        
+        R_flat = self.R_grid[0, :]
+        
+        T_tot4 = (Tint_flat**4 + Trep_flat**4)
+        Ftot_r = sigma * T_tot4
+        
+        theta_0 = np.arcsin(self.Hx/R_flat)
+        cov_fac = theta_0 - 0.5 * np.sin(2*theta_0)
+        
+        self.Lseed = 2 * np.trapz(Ftot_r * (cov_fac/np.pi) * 2*np.pi * R_flat, R_flat)
+      
+        
+    
+    
+    """
+    Calculating spectrum
+    """
+    def Calc_spec(self):
+        """
+        Calculates spectrum in units W/Hz
+
+        """
+        self.Es = (self.nu_grid * u.Hz).to(u.keV, equivalencies=u.spectral()).value
+        ph_hc = donthcomp(self.Es, [self.gamma_h, self.kT_h, self.kT_seed, 1, 0])
+        ph_hc = (ph_hc * u.W/u.Hz).to(u.W/u.keV, equivalencies=u.spectral()).value  
+        
+        #normC = (self.Lseed + self.Lx)/np.trapz(ph_hc, self.nu_grid)
+        normC = self.Lx/np.trapz(ph_hc, self.nu_grid)
+        L_nu = normC * ph_hc #* np.cos(self.inc)
+                
+        
+        return L_nu
+
+            
         
         
         
 if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+    
     r_h = 25
     r_w = 100
     r_out = 400
@@ -114,5 +213,9 @@ if __name__ == '__main__':
     
     
     adaf_mod = ADAF(r_h, M, inc, mdot, a, gamma_h, kT_h, r_out)
-    print(adaf_mod.r_isco)
-        
+    Lnus = adaf_mod.Calc_spec()
+    nus = adaf_mod.nu_grid
+    
+    plt.loglog(nus, nus*Lnus)
+    plt.show()
+            

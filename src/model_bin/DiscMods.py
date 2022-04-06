@@ -23,7 +23,7 @@ from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
 #import excTHCOMP as thc
-from pyNTHCOMP import donthcomp
+from .pyNTHCOMP import donthcomp
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
@@ -61,7 +61,7 @@ class Disc:
     
     """
     Emin = 1e-4 #keV
-    Emax = 10 #keV
+    Emax = 1e3 #keV
     hx = 10 #height of corona
     A = 0.3 #disc albedo - fixed same as in AGNSED
     numR = 400 #Nr of gridpoints in R
@@ -150,6 +150,7 @@ class Disc:
         #Creating grid over disc
         dlog_R = (np.log10(self.R_out) - np.log10(self.R_isco))/self.numR
         R_inMidBin = 10**(np.log10(self.R_isco) + dlog_R/2)
+        #R_inMidBin = 10**(np.log10(self.R_in) + dlog_R/2)
         R_outMidBin = 10**(np.log10(self.R_out) - dlog_R/2)
         
         self.R_grid, self.phi_grid = np.meshgrid(np.geomspace(
@@ -349,6 +350,11 @@ class Disc:
         
         T4 = const_fac * Rt 
         
+        #fac = 3 * (1 - (self.R_isco/self.R_grid)**(1/2))
+        #main = (G*self.M*self.Mdot)/(8*np.pi*self.R_grid**3)
+        #
+        #T4 = (1/sigma) * main * fac
+
         return T4**(1/4)
     
 
@@ -416,7 +422,7 @@ class Disc:
         #Converting from intensity to photon flux
         Fnu = np.pi * B_nu
         dLnu = 2 * 2*np.pi * Fnu * R_flat[:, np.newaxis]
-        Lnu = np.trapz(y=dLnu * np.cos(self.inc), x=R_flat, axis=0)
+        Lnu = np.trapz(y=dLnu, x=R_flat, axis=0)
         
         Ltot = np.trapz(y=Lnu, x=self.nu_grid)
         
@@ -427,7 +433,7 @@ class Disc:
     def calc_XrayPower(self):
         L_full = self.int_power(self.r_isco)
         L_tr = self.int_power(self.r_in)
-        
+
         Lxr = L_full - L_tr
         return Lxr
     
@@ -463,7 +469,7 @@ class Disc:
         
         Fnu = np.pi * B_nu
         dLs_r = 2 * np.trapz(y=Fnu, x=self.phi_grid[:, 0], axis=0)
-        Lnu = np.trapz(y=dLs_r * np.cos(self.inc) * self.R_grid[0, :], 
+        Lnu = np.trapz(y=dLs_r * np.cos(self.inc)/0.5 * self.R_grid[0, :], 
                         x=self.R_grid[0, :])
         
         return Lnu
@@ -650,10 +656,8 @@ class Disc:
             1/(np.exp((h*self.nu_grid)/(k_B * T_tot[:, np.newaxis])) - 1))
         
         F_nu = np.pi * B_nu
-        #F_nu = B_nu
         dLnu = 2 * 2*np.pi * F_nu * R_flat[:, np.newaxis]
-        Lnu = np.trapz(y=dLnu * np.cos(self.inc), x=R_flat, axis=0)
-        
+        Lnu = np.trapz(y=dLnu * np.cos(self.inc)/0.5, x=R_flat, axis=0)
         
         return Lnu
     
@@ -781,32 +785,35 @@ class CompDisc(Disc):
         Returns
         -------
         Lnu : 1D-array
-            Comptonsed disc spectrum
+            Comptonsed disc spectrum in W/Hz
 
         """
-        Es = (self.nu_grid * u.Hz).to(u.keV, equivalencies=u.spectral()).value
+        self.Es = (self.nu_grid * u.Hz).to(u.keV, equivalencies=u.spectral()).value
         Ts = self._T_seed(Lirr)
         Ts_r = np.mean(Ts, axis=0)
         
         Lloc = self._L_local(Ts)
         Lloc_r = np.trapz(Lloc, self.phi_grid[:, 0], axis=0)
-        
+
+ 
         Ts_r_kev = (Ts_r * k_B)/(Ce * 1000) #shifting to kev
         for i in range(len(self.R_grid[0, :])):
             
             if np.isscalar(Ts_r_kev[i]):
-                ph_r = donthcomp(Es, [self.gamma_c, self.kTe_c, Ts_r_kev[i], 1, 0])
-                normR = Lloc_r[i]/np.trapz(ph_r, Es)
-                ph_r = normR * ph_r
-                ph_r_nu = (ph_r * u.W/u.keV).to(u.W/u.Hz, 
+                ph_r = donthcomp(self.Es, [self.gamma_c, self.kTe_c, Ts_r_kev[i], 1, 0])
+                ph_r = (ph_r * u.W/u.keV).to(u.W/u.Hz, 
                                             equivalencies=u.spectral()).value
+                
+                normR = Lloc_r[i]/np.trapz(ph_r, self.nu_grid)
+                ph_r_nu = normR * ph_r
+                                        
                 if i == 0:
                     fs_r = ph_r_nu
                 else:
                     fs_r = np.column_stack((fs_r, ph_r_nu))
             
             else:
-                ph_r_nu = np.zeros(len(Es))
+                ph_r_nu = np.zeros(len(self.Es))
                 ph_r_nu = np.ma.masked_where(ph_r_nu==0, ph_r_nu)
                 
                 if i == 0:
@@ -814,7 +821,7 @@ class CompDisc(Disc):
                 else:
                     fs_r = np.column_stack((fs_r, ph_r_nu))
         
-        Lnu = np.trapz(2 * np.cos(self.inc) * fs_r * self.R_grid[0, :], self.R_grid[0, :])
+        Lnu = np.trapz(2 * np.cos(self.inc)/0.5 * fs_r * self.R_grid[0, :], self.R_grid[0, :])
         return Lnu
     
     
