@@ -19,6 +19,7 @@ import sys
 sys.path.append('/home/wljw75/Documents/phd/AGNvar/src')
 
 from agnvar import AGN
+import xspec #so can compare to agnsed
 
 
 #Accretion params
@@ -29,6 +30,7 @@ M = 2e8
 mdot = 10**(-1.4)
 a_star = 0
 inc = np.rad2deg(np.arccos(0.9))
+z=0
 gamma_w = 2.5
 kT_w = 0.2
 gamma_h = 1.7
@@ -38,7 +40,7 @@ mod_rs = [r_h, r_w, r_out]
 
 
 #Calculating my model
-agn_mod = AGN(M, mdot, a_star, inc, mods, mod_rs, gamma_wc=gamma_w, kT_wc=kT_w,
+agn_mod = AGN(M, mdot, a_star, inc, z, mods, mod_rs, gamma_wc=gamma_w, kT_wc=kT_w,
               gamma_hc=gamma_h, kT_hc=kT_h, skip_checks=True)
 
 spec_comps = agn_mod.SpecComponents()
@@ -59,17 +61,28 @@ ad_L = (ad_L * u.W).to(u.erg/u.s).value
 tot_spec = hc_L + wc_L + ad_L
 
 
-#Importing XSPEC model
-xs_nu, xs_fs = np.loadtxt('agnsed_xspecTest.qdp', skiprows=3, usecols=(0, 2),
-                          unpack=True)
-xs_n_nu, xs_n_fs = np.loadtxt('agnsed_xspecTest_noReprocessing.qdp',
-                              skiprows=3, usecols=(0, 2), unpack=True)
+#Calculating AGNSED (for comparison)
+xspec.Xset.chatter = 0
+xspec.AllData.dummyrsp(1e-4, 1e3, 1000)
+
+mpars = (M, 200, -1.4, a_star, 0.9, kT_h, kT_w, gamma_h, gamma_w, r_h, r_w, -1, 10, 1, z)
+xspec.Model('agnsed', setPars=mpars)
+
+xspec.Plot.device = '/null'
+              
+xspec.Plot('model')
+Es = np.array(xspec.Plot.x())
+phs = np.array(xspec.Plot.model())
+
+ph_f = phs*Es
+xs_fs = (ph_f * u.keV/u.s/u.keV).to(u.W/u.Hz, equivalencies=u.spectral()).value
+xs_nu = (Es*u.keV).to(u.Hz, equivalencies=u.spectral())
 
 D = 200 * u.Mpc
 D = D.to(u.cm).value
 
 xs_L = xs_fs * 4 * np.pi * D**2
-xs_n_L = xs_n_fs * 4 * np.pi * D**2
+
 
 
 
@@ -80,8 +93,8 @@ plt.loglog(hc_nu, hc_nu*hc_L, color='blue', ls='-.', label='Hot Comp.')
 plt.loglog(wc_nu, wc_nu*wc_L, color='green', ls='-.', label='Warm Comp.')
 plt.loglog(ad_nu, ad_nu*ad_L, color='red', ls='-.', label='Disc')
 plt.loglog(nu_tot, nu_tot*tot_spec, color='k', label='Total')
-plt.loglog(xs_nu, xs_L, color='gray', ls='dotted', label='XSPEC')
-plt.loglog(xs_n_nu, xs_n_L, color='black', ls='dotted', label='XSPEC, no Rep.')
+plt.loglog(xs_nu, xs_nu*xs_L*1e7, color='gray', ls='dotted', label='XSPEC')
+#plt.loglog(xs_n_nu, xs_n_L, color='black', ls='dotted', label='XSPEC, no Rep.')
 
 
 plt.ylabel(r'$\nu F_{\nu}$  (erg/s)')
@@ -90,11 +103,3 @@ plt.ylim(1e42, 1e45)
 plt.legend(frameon=False)
 plt.show()
 
-#print(agn_mod.fs_r)
-
-
-T_NT = agn_mod.mod_dict['AD'].Td
-r_gr = agn_mod.mod_dict['AD'].R_grid/agn_mod.mod_dict['AD'].Rg
-
-plt.plot(r_gr[0, :], T_NT[0, :])
-plt.show()

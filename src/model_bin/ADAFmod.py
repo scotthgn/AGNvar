@@ -126,27 +126,20 @@ class ADAF(Disc):
         disc or T_NT(r_hot) * exp(y_w), where y_w is Compron y-parameter
         for the warm comptonisation region (see Kubota & Done 2018)
         """
-        if self.seed_type == 'AD':
-            #Ehhhm, NO. Fix this - Remeber to mask below r_tr!!
-            T_int = self.Td[0, 0] #Inner disc temperature in K
-            T_irr = self.T_rep(self.Lx)
-            T_irr = T_irr[0, 0]
-            
-            Ts = (T_int**4 + T_irr**4)**(1/4)
-            
-            kTs = k_B * Ts
+        Tedge = self.T_int(self.r_h)
+        if self.seed_type == 'AD':            
+            kTs = k_B * Tedge
             self.kT_seed = (kTs * u.J).to(u.keV).value
         
         else:
             #Using the soft-compton spectrum to estimate temperature,
             #seeing as don't know optical depth \tau.
             #Assuming equilibrium temperature given by inverse Compton temp.
-            wc_spec = self.wc_mod.Calc_spec(self.Lx)
-            wc_L = np.trapz(wc_spec, self.nu_grid)
-            wc_E = np.trapz(h*self.nu_grid*wc_spec, self.nu_grid)
+            ysb = (self.gamma_w * (4/9))**(-4.5)
             
-            kT_ic = wc_E/(4 * wc_L)
-            self.kT_seed = (kT_ic * u.J).to(u.keV).value
+            kTedge = k_B * Tedge
+            kTedge = (kTedge * u.J).to(u.keV).value
+            self.kT_seed = ysb * kTedge
     
     
     def _L_seed(self):
@@ -184,8 +177,8 @@ class ADAF(Disc):
         ph_hc = donthcomp(self.Es, [self.gamma_h, self.kT_h, self.kT_seed, 1, 0])
         ph_hc = (ph_hc * u.W/u.Hz).to(u.W/u.keV, equivalencies=u.spectral()).value  
         
-        #normC = (self.Lseed + self.Lx)/np.trapz(ph_hc, self.nu_grid)
-        normC = self.Lx/np.trapz(ph_hc, self.nu_grid)
+        normC = (self.Lseed + self.Lx)/np.trapz(ph_hc, self.nu_grid)
+        #normC = self.Lx/np.trapz(ph_hc, self.nu_grid)
         L_nu = normC * ph_hc #* np.cos(self.inc)
                 
         

@@ -64,8 +64,10 @@ class Disc:
     Emax = 1e3 #keV
     hx = 10 #height of corona
     A = 0.3 #disc albedo - fixed same as in AGNSED
-    numR = 400 #Nr of gridpoints in R
-    numphi = 400 #Nr of gridpoints in phi
+    
+    #dr_dex = 10 #radial spacing - N point per decade
+    numR = 100 #Nr of gridpoints in R
+    numphi = 100 #Nr of gridpoints in phi
     
     def __init__(self,
                  r_in,
@@ -139,6 +141,7 @@ class Disc:
         self.Mdot_edd = self.L_edd/(self.eta * c**2)
         
         
+        
         #Physical units
         self.R_in = self.r_in * self.Rg
         self.R_out = self.r_out * self.Rg
@@ -172,7 +175,7 @@ class Disc:
         
         #Disc properties that don't change during evolution
         self.tau_grid = self.delay_surf() #delay surface
-        self.Td = self.T_int() #intrinisc disc temperature
+        self.Td = self.T_int(self.R_grid/self.Rg) #intrinisc disc temperature
         self.Lx = self.calc_XrayPower() #Mean X-ray power
 
     
@@ -225,7 +228,8 @@ class Disc:
         """
         Caclulate eddington Luminosity
         """
-        Ledd = (4 * np.pi * G * self.M * mp * c)/sigmaT
+        #Ledd = (4 * np.pi * G * self.M * mp * c)/sigmaT
+        Ledd = 1.39e31 * self.M #following agnsed
         self.L_edd = Ledd
     
     
@@ -284,7 +288,7 @@ class Disc:
         C2 = ((3 * (y1 - self.a)**2)/(y*y1 * (y1 - y2) * (y1 - y3))) * np.log(
             (y - y1)/(y_isc - y1))
         C2 += ((3 * (y2 - self.a)**2)/(y*y2 * (y2 - y1) * (y2 - y3))) * np.log(
-            (y - y2)/(y_isc - y1))
+            (y - y2)/(y_isc - y2))
         C2 += ((3 * (y3 - self.a)**2)/(y*y3 * (y3 - y1) * (y3 - y2))) * np.log(
             (y - y3)/(y_isc - y3))
         
@@ -342,18 +346,13 @@ class Disc:
     one for T_reprocessed (T_rep)
     """
     
-    def T_int(self):
+    def T_int(self, r):
        
-        Rt = self._calc_NTparams(self.R_grid/self.Rg)
+        Rt = self._calc_NTparams(r)
         const_fac = (3 * G * self.M * self.mdot * self.Mdot_edd)/(
-            8 * np.pi * sigma * (self.R_grid)**3)
+            8 * np.pi * sigma * (r * self.Rg)**3)
         
         T4 = const_fac * Rt 
-        
-        #fac = 3 * (1 - (self.R_isco/self.R_grid)**(1/2))
-        #main = (G*self.M*self.Mdot)/(8*np.pi*self.R_grid**3)
-        #
-        #T4 = (1/sigma) * main * fac
 
         return T4**(1/4)
     
@@ -405,7 +404,7 @@ class Disc:
         #Using different masking than the one initiated in __init__
         #Since this function will be used for more than just r_in
         R_cut = r_cut * self.Rg
-        Td_all = self.T_int()
+        Td_all = self.Td
         
         #Masking grid values below r_cut
         R_mask = np.ma.masked_less_equal(self.R_grid, R_cut)
