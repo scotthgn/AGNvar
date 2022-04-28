@@ -56,7 +56,7 @@ class AGN:
     mu = 0.55 #mean particle mass - fixed at solar abundances
     A = 0.3 #Disc albedo = fixed at 0.3 for now
     
-    dr_dex = 10 #radial grid spacing - N points per decade
+    dr_dex = 40 #radial grid spacing - N points per decade
     dphi = 0.01 #azimuthal grid spacing
     
     return_disc = True #flags for what components to return
@@ -987,11 +987,10 @@ class AGN:
         if self.units == 'SI' or self.units == 'cgs':
             idx_mod_up = np.abs(band + band_width/2 - self.nu_grid).argmin()
             idx_mod_low = np.abs(band - band_width/2 - self.nu_grid).argmin()
-            print(idx_mod_low, idx_mod_up)
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
-            
+                
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
                 Lcurve = np.trapz(Lc_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
@@ -1016,17 +1015,21 @@ class AGN:
     Section for calculating impulse response functions
     """
     
-    def IRFcomponents(self, nu, dnu):
+    def response_components(self, band, band_width):
         """
-        Calculates the impulse response for each disc component for a band
-        centered on frequency nu, with bandwidth dnu
+        Calculates the response for each disc component for a band
+        with bad_width + the total responese, to a 'delta' function flash in
+        the x-ray.
+        
+        This is to get an idea of how different parts of the accretion flow
+        respond at a given time
 
         Parameters
         ----------
-        nu : float
-            Band central frequency - units : Hz.
-        dnu : float
-            Band width - units : Hz.
+        band : float
+            Band central frequency/energy - units : Hz/keV.
+        band_width : float
+            Band width - units : Hz/keV.
 
         Returns
         -------
@@ -1035,40 +1038,70 @@ class AGN:
             component
 
         """
-        
-        self.t_imp = np.linspace(0, 8, 20) #Time array for impulse L-curve
-        x_imp = np.full(len(self.t_imp), 1)
-        x_imp[0:2] = 2
-        dt = (self.t_imp[1] - self.t_imp[0])# * 24 * 3600
-        
-        
-        self.irf_comp = {}
-        for i in self.mods:
-            if i == 'AD' or i == 'DD':
-                L_imp = self.mod_dict[i].do_evolve(nu, x_imp, self.t_imp)
-                #L_mean = np.mean(L_imp)
-                L_int = self.mod_dict[i].calc_Lnu(nu, self.Lx)
-                irf_mod = (L_imp/L_int - 1)/(2*dt)  
-                self.irf_comp[i] = irf_mod
-            
-            elif i == 'WC':
-                L_imps = self.mod_dict[i].do_evolve(x_imp, self.t_imp)
-                nus_mod = self.mod_dict[i].nu_grid
-                
-                idx_nu = np.abs(nus_mod - nu).argmin()
-                
-                L_imp = L_imps[idx_nu, :]
-                #L_mean = np.mean(L_imp)
-                
-                L_ints = self.mod_dict[i].Calc_spec(self.Lx)
-                L_int = L_ints[idx_nu]
-                
-                irf_mod = (L_imp/L_int - 1)/(2*dt)
-                self.irf_comp[i] = irf_mod
-        
-        return self.irf_comp
-                
+        tau_max = self.delay_surf(self.r_out, np.pi)
+        self.t_imp = np.linspace(0, tau_max, 200) #Time array for impulse L-curve
+        Tg = (self.Rg/c)/(24*3600) #Light travel time for 1 Rg in days
+        dt = 10*Tg #flash duration
 
+        x_imp = np.full(len(self.t_imp), 1)
+        idx_max = np.abs(dt - self.t_imp).argmin()
+        x_imp[0:idx_max+1] = 2
+
+        
+        Lrp_tot = self.evolve_spec(x_imp, self.t_imp)
+        L_imp = self.generate_lightcurve(band, band_width)
+        L_int_all = self.mean_spec()
+        
+        if self.units == 'cgs' or self.units == 'SI':
+            idx_mod_up = np.abs(band + band_width/2 - self.nu_grid).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.nu_grid).argmin()
+            
+            if idx_mod_up == idx_mod_low:
+                L_int = L_int_all[idx_mod_up] * band_width
+            
+            else:
+                Lint_band = L_int_all[idx_mod_low:idx_mod_up+1]
+                L_int = np.trapz(Lint_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
+        
+        elif self.units == 'counts':
+            idx_mod_up = np.abs(band + band_width/2 - self.Egrid).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.Egrid).argmin()
+            
+            if idx_mod_up == idx_mod_low:
+                L_int = L_int_all[idx_mod_up, :] * band_width
+            
+            else:
+                Lint_band = L_int_all[idx_mod_low:idx_mod_up+1]
+                L_int = np.trapz(Lint_band, self.Egrid[idx_mod_low:idx_mod_up+1], axis=0)
+                
+        #irf_mod = (L_imp/L_int - 1)/(2*dt)  
+        tot_resp = (L_imp/L_int - 1)/(2*dt)
+        
+        
+        return tot_resp
+    
+    
+    def radial_transfer(self, r, dr):
+        
+        tau_min = self.delay_surf(r, 0)
+        tau_max = self.delay_surf(r, np.pi)
+        Tg = ((self.Rg*dr)/c)/(24*3600) #Light travel time for annulus in days
+        dt = Tg/4 #flash duration
+        delays = np.linspace(0, 8, 1000)
+        
+        def delta(phi, tau):
+            tau_ann = self.delay_surf(r, phi)
+            dirac_gauss = np.exp(-((tau - tau_ann)**2)/(dt**2))
+            return dirac_gauss
+            
+        T = np.array([])
+        for i in range(len(delays)):
+            T_tau = quad(delta, 0, 2*np.pi, args=(delays[i]))[0]
+            T = np.append(T, [T_tau/(2*np.pi)])
+        
+        norm = 1/np.trapz(T, delays)
+        T *= norm
+        return T, delays
 
 
 if __name__ == '__main__': 
@@ -1078,7 +1111,7 @@ if __name__ == '__main__':
     dist = 200
     lmdot = -1.298
     astar = 0
-    cosi = 0.9
+    cosi = 0.3
     kTe_h = 100
     kTe_w = 0.2
     gamma_h = 2.03
@@ -1100,18 +1133,18 @@ if __name__ == '__main__':
     lfracs = np.random.rand(len(ts_test)) + 0.5
     
     datdir = '/home/wljw75/Documents/phd/Fairall9_lightCurveCampaign/lightcurves/fourierAnalysis/F9_FourierReduced_Normalised_Interpolated_and_ReBinned_V1/'
-    
+    """
     ts, fx = np.loadtxt(datdir + 'HX.dat', usecols=(0, 1), unpack=True)
     ts2, fu = np.loadtxt(datdir + 'W2.dat', usecols=(0, 1), unpack=True)
 
     #myagn.return_disc = False
     #myagn.return_hot = False
     Lev = myagn.evolve_spec(fx, ts)
-    
+    """
     nus = myagn.nu_grid
     nu_u2 = (1928 * u.AA).to(u.Hz, equivalencies=u.spectral()).value
     idx15 = np.abs(nu_u2 - nus).argmin()
-    
+    """
     lcurve_phy = myagn.generate_lightcurve(nu_u2, 0.1 * nu_u2)
     lcurve = lcurve_phy/np.mean(lcurve_phy)
     
@@ -1139,5 +1172,36 @@ if __name__ == '__main__':
     plt.ylim(1e-12, 1e-10)
     plt.xlim(1e14, 1e20)
     plt.show()
+    """
+    #Testing response
     
+    myagn.return_disc = False
+    myagn.return_hot = False
+    resp = myagn.response_components(nu_u2, 0.1*nu_u2)
+    t_resp = myagn.t_imp
+    
+    plt.plot(t_resp, resp)
+    plt.show()
+    
+    #testing radial response
+    r_bins = myagn.logr_wc_bins
+    drs = 10**r_bins[1:] - 10**r_bins[:-1]
+    rmid = 10**r_bins[:-1] + drs/2
+    
+    print(rmid[20], drs[20])
+    
+    for n in range(len(rmid)):
+        Tr, tau = myagn.radial_transfer(rmid[n], drs[n])
+        
+        if n == 0:
+            Ttot_all = Tr 
+        else:
+            Ttot_all = np.column_stack((Ttot_all, Tr))
+        
+        plt.plot(tau, Tr)
+    
+    Ttot = np.trapz(Ttot_all, rmid, axis=-1)
+    
+    plt.plot(tau, Ttot, color='k')
+    plt.show()
     
