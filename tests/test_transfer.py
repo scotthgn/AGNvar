@@ -20,32 +20,24 @@ sys.path.append('/home/wljw75/Documents/phd/AGNvar/src')
 from agnvar import AGN
 from model_bin.DiscMods import Disc
 
-#Generating mock xray light-curve
-ts = np.arange(0, 200, 1)
-xs_f = np.sin(ts/10) + 1
 
-plt.plot(ts, xs_f)
-plt.show()
-
-#Initiating agn object
+r = 10
+h = 10
 M = 2e8
-mdot = 10**(-1.4)
-a_star = 0
-inc = 25
-z = 0
+c = 3e8
+G = 6.67e-11 * 1.99e30
+inc = 0.5
 
-mods = ['AD']
-mod_rs = [20, -1]
+Rg = (G*M)/c**2
 
-tst_agn = AGN(M, mdot, a_star, inc, z, mods, mod_rs)
-irf_comps = tst_agn.IRFcomponents(1e15, 10)
-irf_dsc = irf_comps['AD']
-irf_ts = tst_agn.t_imp
-print(irf_dsc)
-plt.plot(irf_ts, irf_dsc)
-plt.show()
+tau_min = (Rg/c) * (np.sqrt(r**2 + h**2) + h*np.cos(inc) - r*np.sin(inc))
+tau_max = (Rg/c) * (np.sqrt(r**2 + h**2) + h*np.cos(inc) + r*np.sin(inc))
 
-fs_cnv = np.convolve(irf_dsc, xs_f)
+taus = np.linspace(tau_min, tau_max, 10)
 
-plt.plot(ts, fs_cnv)
-plt.show()
+def dphi(tau):
+    root = 1 - ((1/(r*np.sin(inc))) * (np.sqrt(r**2 + h**2) + h*np.cos(inc) - (c*tau)/Rg))**2
+    dtaus
+    return -1/(np.sqrt(root))
+
+print(dphi(taus))

@@ -23,7 +23,7 @@ from multiprocessing import Pool
 from tqdm import tqdm
 import warnings
 #import excTHCOMP as thc
-from .pyNTHCOMP import donthcomp
+from pyNTHCOMP import donthcomp
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
 warnings.filterwarnings('ignore') 
@@ -896,7 +896,7 @@ if __name__ == '__main__':
     
     ad_mod = Disc(r_d, r_out, a_star, inc, mdot, M)
     
-    print(ad_mod.r_sg)
+    print(ad_mod.Lx)
 
     
     
