@@ -46,9 +46,11 @@ k_B = const.k_B.value #Boltzmann const, J K^-1
 
 class AGN:
     """
-    Defines an AGN object for you to do 'funky' science on!
-    This class initiates an object like AGNSED (Kubota & Done 2018) - 
-    so you can now test this model against timing analysis!!!
+    Main AGN object - Defines all the general properties we expect to be the 
+    same across models. e.g efficiency, eddington luminosity, etc.
+    
+    Also deals with all the 'book-keeping' with regards to defining 
+    energy and radial grids, and dealing with units
     """
     
     Emin = 1e-4
@@ -73,17 +75,9 @@ class AGN:
                  log_mdot,
                  astar,
                  cosi,
-                 kTe_h,
-                 kTe_w,
-                 gamma_h,
-                 gamma_w,
-                 r_h,
-                 r_w,
-                 log_rout,
-                 hmax,
                  z):
         """
-        Initiates the AGN object - defines geometry
+        Initiates the AGN object 
 
         Parameters
         ----------
@@ -97,30 +91,6 @@ class AGN:
             Dimensionless spin parameter
         cosi : float
             cosine of inclination
-        kTe_h : float
-            Electron temperature for hot corona (high energy rollover)
-            If -ve ONLY hot component returned
-            Units : keV
-        kTe_w : float
-            Electron temperature for warm corona (high energy rollover)
-            Units : keV
-        gamma_h : float
-            Hot Compton photon index
-        gamma_w : float
-            Warm Compton photon index
-        r_h : float
-            Outer edge of hot corona (or inner edge of warm..)
-            If -ve uses risco
-            Units : Rg
-        r_w : float 
-            Outer edge of warm corona (or inner edge of standard disc)
-            If -ve uses risco
-            Units : Rg
-        log_rout : float
-            Outer edge of disc - units : Rg
-            If -ve uses r_sg
-        hmax : float
-            Max height of hot corona - units : Rg
         z : float
             Redshift (not currently doing anything - will be updated later)
         """
@@ -132,14 +102,6 @@ class AGN:
         self.a = astar
         self.cosinc = cosi
         self.inc = np.arccos(cosi)
-        self.kTe_h = kTe_h
-        self.kTe_w = kTe_w
-        self.gamma_h = gamma_h
-        self.gamma_w = gamma_w
-        self.r_h = r_h
-        self.r_w = r_w
-        self.r_out = 10**(log_rout)
-        self.hmax = hmax
         self.z = z
         
         
@@ -158,42 +120,17 @@ class AGN:
         self._calc_Dl()
         
         
-        #Creating radial grid for each component
-        self.dlog_r = 1/self.dr_dex
-        self.logr_ad_bins = self._make_rbins(np.log10(self.r_w), np.log10(self.r_out))
-        self.logr_wc_bins = self._make_rbins(np.log10(self.r_h), np.log10(self.r_w))
-        
-        #If too narrow to create a bin with correct size, just set one bin
-        #instead
-        if len(self.logr_ad_bins) == 1:
-            self.logr_ad_bins = np.array([np.log10(self.r_w), np.log10(self.r_out)])
-        
-        if len(self.logr_wc_bins) == 1:
-            self.logr_wc_bins = np.array([np.log10(self.r_h), np.log10(self.r_w)])
-        
      
         #Creating azimuthal bins
         self.phis = np.arange(0, 2*np.pi + self.dphi, self.dphi)
         
-        
-         #Creating delay surface for warm region and disc
-        rd_mids = 10**(self.logr_ad_bins[:-1] + self.dlog_r/2)
-        rw_mids = 10**(self.logr_wc_bins[:-1] + self.dlog_r/2)
-        
-        rad_mesh, phi_admesh = np.meshgrid(rd_mids, self.phis)
-        rwc_mesh, phi_wcmesh = np.meshgrid(rw_mids, self.phis)
-        
-        self.tau_ad = self.delay_surf(rad_mesh, phi_admesh)
-        self.tau_wc = self.delay_surf(rwc_mesh, phi_wcmesh)
-
         
         #Energy/frequency grid
         self.Egrid = np.geomspace(self.Emin, self.Emax, self.numE)
         self.nu_grid = (self.Egrid * u.keV).to(u.Hz,
                                 equivalencies=u.spectral()).value
         
-        #Mean X-ray luminosity
-        self.Lx = self.hotCorona_lumin()
+        
 
     
     
@@ -519,11 +456,6 @@ class AGN:
     
     
     
-
-    ##########################################################################
-    #---- Calculating spectra
-    ##########################################################################
-    
     def bb_radiance_ann(self, Ts):
         """
         Black-body radiance across the annulus
@@ -544,7 +476,120 @@ class AGN:
         Bnu = pre_fac / exp_fac
         
         return np.pi * Bnu
+    
+    
+    
+class AGNsed_var(AGN):
+    
+    """
+    This is essentially the same as AGNSED in XSPEC (Kubota & Done 2018),
+    however evolves it through time so you can do spectral timing analysis
+    """
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 z):
+        """
+        Initiates the AGNsed object - defines geometry
+
+        Parameters
+        ----------
+        M : float
+            BH mass - units : Msol.
+        dist : float
+            Co-Moving distance - units : Mpc
+        log_mdot : float
+            log of mass accretion rate - units : L/Ledd
+        astar : float
+            Dimensionless spin parameter
+        cosi : float
+            cosine of inclination
+        kTe_h : float
+            Electron temperature for hot corona (high energy rollover)
+            If -ve ONLY hot component returned
+            Units : keV
+        kTe_w : float
+            Electron temperature for warm corona (high energy rollover)
+            Units : keV
+        gamma_h : float
+            Hot Compton photon index
+        gamma_w : float
+            Warm Compton photon index
+        r_h : float
+            Outer edge of hot corona (or inner edge of warm..)
+            If -ve uses risco
+            Units : Rg
+        r_w : float 
+            Outer edge of warm corona (or inner edge of standard disc)
+            If -ve uses risco
+            Units : Rg
+        log_rout : float
+            Outer edge of disc - units : Rg
+            If -ve uses r_sg
+        hmax : float
+            Max height of hot corona - units : Rg
+        z : float
+            Redshift (not currently doing anything - will be updated later)
+        """
         
+        #getting properties definied in __init__ from AGN parent class
+        super().__init__(M, dist, log_mdot, astar, cosi, z) 
+        
+        #Read remaining parameters
+        self.kTe_h = kTe_h
+        self.kTe_w = kTe_w
+        self.gamma_h = gamma_h
+        self.gamma_w = gamma_w
+        self.r_h = r_h
+        self.r_w = r_w
+        self.r_out = 10**(log_rout)
+        self.hmax = hmax
+        
+        
+        #Creating radial grid for each component
+        self.dlog_r = 1/self.dr_dex
+        self.logr_ad_bins = self._make_rbins(np.log10(self.r_w), np.log10(self.r_out))
+        self.logr_wc_bins = self._make_rbins(np.log10(self.r_h), np.log10(self.r_w))
+        
+        #If too narrow to create a bin with correct size, just set one bin
+        #instead
+        if len(self.logr_ad_bins) == 1:
+            self.logr_ad_bins = np.array([np.log10(self.r_w), np.log10(self.r_out)])
+        
+        if len(self.logr_wc_bins) == 1:
+            self.logr_wc_bins = np.array([np.log10(self.r_h), np.log10(self.r_w)])
+            
+        
+        #Creating delay surface for warm region and disc
+        rd_mids = 10**(self.logr_ad_bins[:-1] + self.dlog_r/2)
+        rw_mids = 10**(self.logr_wc_bins[:-1] + self.dlog_r/2)
+        
+        rad_mesh, phi_admesh = np.meshgrid(rd_mids, self.phis)
+        rwc_mesh, phi_wcmesh = np.meshgrid(rw_mids, self.phis)
+        
+        self.tau_ad = self.delay_surf(rad_mesh, phi_admesh)
+        self.tau_wc = self.delay_surf(rwc_mesh, phi_wcmesh)
+        
+        #Mean X-ray luminosity
+        self.Lx = self.hotCorona_lumin()
+        
+    
+    
+    ##########################################################################
+    #### Calculate spectra
+    ##########################################################################
     
     def disc_annuli(self, r, dr, Lx_t):
         """
@@ -1096,6 +1141,8 @@ class AGN:
         return T, delays
 
 
+
+
 if __name__ == '__main__': 
 
     import matplotlib.pyplot as plt
@@ -1116,10 +1163,10 @@ if __name__ == '__main__':
     z = 0
     
     np.random.seed(123)
-    myagn = AGN(M, dist, lmdot, astar, cosi, kTe_h, kTe_w, gamma_h, gamma_w,
+    myagn = AGNsed_var(M, dist, lmdot, astar, cosi, kTe_h, kTe_w, gamma_h, gamma_w,
                 r_h, r_w, log_rout, hmax, z)
     
-    
+    print(myagn.risco)
     myagn.set_cgs()
     myagn.set_flux()
     ts_test = np.arange(0, 100, 1)
@@ -1133,11 +1180,11 @@ if __name__ == '__main__':
     #myagn.return_disc = False
     #myagn.return_hot = False
     Lev = myagn.evolve_spec(fx, ts)
-    """
+    
     nus = myagn.nu_grid
     nu_u2 = (1928 * u.AA).to(u.Hz, equivalencies=u.spectral()).value
     idx15 = np.abs(nu_u2 - nus).argmin()
-    """
+    
     lcurve_phy = myagn.generate_lightcurve(nu_u2, 0.1 * nu_u2)
     lcurve = lcurve_phy/np.mean(lcurve_phy)
     
@@ -1165,7 +1212,7 @@ if __name__ == '__main__':
     plt.ylim(1e-12, 1e-10)
     plt.xlim(1e14, 1e20)
     plt.show()
-    """
+    
     #Testing response
     
     myagn.return_disc = False
@@ -1197,4 +1244,4 @@ if __name__ == '__main__':
     
     plt.plot(tau, Ttot, color='k')
     plt.show()
-    
+    """
