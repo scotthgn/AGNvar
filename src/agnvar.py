@@ -15,6 +15,7 @@ user end to make combining the models easier... If you want to play around
 with the models directly, then have a look in the model_bin!
 """
 
+
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -197,13 +198,10 @@ class AGN:
     
     
     
-    """
-    Section for dealing with units. Essentially just methods to change the unit
-    flag - and then methods to convert calculated spectrum to desired units.
-    Also includes method for changing the energy grid to something other
-    than the default
-    """
-          
+    ##########################################################################
+    #---- Units and energy grids
+    ##########################################################################
+    
     def set_cgs(self):
         """
         Changes output spectra to cgs units
@@ -297,12 +295,9 @@ class AGN:
 
     
     
-        
-        
-    """
-    Calculating disc properties
-    i.e r_isco, L_edd, NT temp, etc
-    """
+    ##########################################################################
+    #---- Disc properties
+    ##########################################################################
     
     def _calc_Ledd(self):
         """
@@ -524,10 +519,11 @@ class AGN:
     
     
     
-    """
-    Upcoming sections are all for calculating spectrum for each component
-    First up - disc spectrum!
-    """
+
+    ##########################################################################
+    #---- Calculating spectra
+    ##########################################################################
+    
     def bb_radiance_ann(self, Ts):
         """
         Black-body radiance across the annulus
@@ -814,15 +810,11 @@ class AGN:
         return Lnu_hot
     
     
+
     
-    
-    """
-    Section for evolving each component according to an input light-curve
-    Will then create the fully evolved observed spectrum + the components
-    
-    Also include method for creating just a spectrum based off the input
-    parameters (so essentially AGNSED...)
-    """
+    ##########################################################################
+    #---- Spectral evolution
+    ##########################################################################
     
     def evolve_spec(self, lxs, ts):
         """
@@ -1105,6 +1097,7 @@ class AGN:
 
 
 if __name__ == '__main__': 
+
     import matplotlib.pyplot as plt
     
     M = 2e8
