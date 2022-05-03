@@ -474,7 +474,7 @@ class AGN:
 
 
 ##############################################################################
-#### The main Composite models
+#---- The main Composite models
 ##############################################################################
     
     
@@ -600,7 +600,7 @@ class AGNsed_var(AGN):
     
     
     ##########################################################################
-    #### Calculate spectra
+    #---- Calculate spectra
     ##########################################################################
     
     def disc_annuli(self, r, dr, Lx_t):
@@ -996,6 +996,11 @@ class AGNsed_var(AGN):
         Generated a light-curve for a band centered on nu, with bandwidth dnu
         
         Currently only does top-hat response/bandpass. Might be updated later.
+        Returnes fluxes integrated over band_width.
+        So units will be:
+            W/m^2         - for SI
+            ergs/s/cm^2   - for cgs
+            counts/s/cm^s - for counts
         
         Input MUST be in whatever units you have set units to be!!!
         i.e if cgs of SI - then Hz,
@@ -1257,7 +1262,7 @@ class AGNdark_var(AGN):
     
     
     ##########################################################################
-    #### Calculate spectra
+    #---- Calculate spectra
     ##########################################################################
     
     def AD_annuli(self, r, dr, Lx_t):
@@ -1438,7 +1443,7 @@ class AGNdark_var(AGN):
     
     
     ##########################################################################
-    #### Spectral Evolution
+    #---- Spectral Evolution
     ##########################################################################
     
     def evolve_spec(self, lxs, ts):
@@ -1564,6 +1569,11 @@ class AGNdark_var(AGN):
         Generated a light-curve for a band centered on nu, with bandwidth dnu
         
         Currently only does top-hat response/bandpass. Might be updated later.
+        Returnes fluxes integrated over band_width.
+        So units will be:
+            W/m^2         - for SI
+            ergs/s/cm^2   - for cgs
+            counts/s/cm^s - for counts
         
         Input MUST be in whatever units you have set units to be!!!
         i.e if cgs of SI - then Hz,
@@ -1626,7 +1636,7 @@ class AGNdark_var(AGN):
 
 
 ##############################################################################
-#### Sub-models (i.e extracting just disc, or just warm Comp etc..)
+#---- Sub-models (i.e extracting just disc, or just warm Comp etc..)
 ##############################################################################
 
 class AGNdisc_var(AGNsed_var):
@@ -1644,7 +1654,7 @@ class AGNdisc_var(AGNsed_var):
                  log_mdot,
                  astar,
                  cosi,
-                 kTe_hot,
+                 kTe_h,
                  kTe_w,
                  gamma_h,
                  gamma_w,
@@ -1722,7 +1732,7 @@ class AGNhot_var(AGNsed_var):
 
 
 ##############################################################################
-#### Testing 
+#---- Testing 
 ##############################################################################
 if __name__ == '__main__': 
 
