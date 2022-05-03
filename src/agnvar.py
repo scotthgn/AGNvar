@@ -470,7 +470,12 @@ class AGN:
         Bnu = pre_fac / exp_fac
         
         return np.pi * Bnu
-    
+
+
+
+##############################################################################
+#### The main Composite models
+##############################################################################
     
     
 class AGNsed_var(AGN):
@@ -1616,12 +1621,113 @@ class AGNdark_var(AGN):
         
         return Lcurve
         
-        
-        
 
 
+
+
+##############################################################################
+#### Sub-models (i.e extracting just disc, or just warm Comp etc..)
+##############################################################################
+
+class AGNdisc_var(AGNsed_var):
+    """
+    If you only want to see the standard accretion disc contribution from
+    the AGNsed model
+    
+    Essentuially this class takes care of dealing with switching parameters
+    within AGNsed_var so you dont have to!
+    """
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_hot,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 z):
+        
+        super().__init__(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h, 
+                         gamma_w, r_h, r_w, log_rout, hmax, z)
+        
+        self.return_hot = False
+        self.return_warm = False
+
+
+class AGNwarm_var(AGNsed_var):
+    """
+    If you only want to see the warm Compton contribution from
+    the AGNsed model
+    
+    """
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar, 
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 z):
+        
+        super().__init__(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h, 
+                         gamma_w, r_h, r_w, log_rout, hmax, z)
+        
+        self.return_disc = False
+        self.return_hot = False
+        
+
+class AGNhot_var(AGNsed_var):
+    """
+    If you only wish to see the hot Compton contribution from the AGNsed
+    model
+    """
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 z):
+        
+        super().__init__(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h,
+                         gamma_w, r_h, r_w, log_rout, hmax, z)
+        
+        self.return_disc = False
+        self.return_warm = False
+    
+
+
+##############################################################################
+#### Testing 
+##############################################################################
 if __name__ == '__main__': 
 
+    
+    
     import matplotlib.pyplot as plt
     
     M = 2e8
