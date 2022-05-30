@@ -55,16 +55,12 @@ class AGN:
     
     Emin = 1e-4
     Emax = 1e4
-    numE = 500
+    numE = 1000
     mu = 0.55 #mean particle mass - fixed at solar abundances
     A = 0.3 #Disc albedo = fixed at 0.3 for now
     
     dr_dex = 40 #radial grid spacing - N points per decade
     dphi = 0.01 #azimuthal grid spacing
-    
-    return_disc = True #flags for what components to return
-    return_warm = True #Determined by the swithcing parameters
-    return_hot = True
     
     units = 'SI' #Default units to be returned
     as_flux = False
@@ -75,6 +71,7 @@ class AGN:
                  log_mdot,
                  astar,
                  cosi,
+                 hmax,
                  z):
         """
         Initiates the AGN object 
@@ -102,6 +99,7 @@ class AGN:
         self.a = astar
         self.cosinc = cosi
         self.inc = np.arccos(cosi)
+        self.hmax = hmax
         self.z = z
         
         #Calculating disc params 
@@ -547,7 +545,7 @@ class AGNsed_var(AGN):
         """
         
         #getting properties definied in __init__ from AGN parent class
-        super().__init__(M, dist, log_mdot, astar, cosi, z) 
+        super().__init__(M, dist, log_mdot, astar, cosi, hmax, z) 
         
         #Read remaining parameters
         self.kTe_h = kTe_h
@@ -568,6 +566,8 @@ class AGNsed_var(AGN):
         
         if r_w < 0:
             self.r_w = self.risco
+        elif r_w >= self.r_out:
+            self.r_w = self.r_out
         
         
         #Creating radial grid for each component
@@ -588,11 +588,11 @@ class AGNsed_var(AGN):
         rd_mids = 10**(self.logr_ad_bins[:-1] + self.dlog_r/2)
         rw_mids = 10**(self.logr_wc_bins[:-1] + self.dlog_r/2)
         
-        rad_mesh, phi_admesh = np.meshgrid(rd_mids, self.phis)
-        rwc_mesh, phi_wcmesh = np.meshgrid(rw_mids, self.phis)
+        self.rad_mesh, self.phi_admesh = np.meshgrid(rd_mids, self.phis)
+        self.rwc_mesh, self.phi_wcmesh = np.meshgrid(rw_mids, self.phis)
         
-        self.tau_ad = self.delay_surf(rad_mesh, phi_admesh)
-        self.tau_wc = self.delay_surf(rwc_mesh, phi_wcmesh)
+        self.tau_ad = self.delay_surf(self.rad_mesh, self.phi_admesh)
+        self.tau_wc = self.delay_surf(self.rwc_mesh, self.phi_wcmesh)
         
         #Mean X-ray luminosity
         self.Lx = self.hotCorona_lumin()
@@ -1081,13 +1081,8 @@ class AGNsed_var(AGN):
         band_width : float
             Band width - units : Hz/keV.
 
-        Returns
-        -------
-        irf_comp : dict
-            Dictionary containing impulse response functions for each model
-            component
-
         """
+        
         tau_max = self.delay_surf(self.r_out, np.pi)
         self.t_imp = np.linspace(0, tau_max, 200) #Time array for impulse L-curve
         Tg = (self.Rg/c)/(24*3600) #Light travel time for 1 Rg in days
@@ -1099,7 +1094,6 @@ class AGNsed_var(AGN):
 
         
         Lrp_tot = self.evolve_spec(x_imp, self.t_imp)
-        L_imp = self.generate_lightcurve(band, band_width)
         L_int_all = self.mean_spec()
         
         if self.units == 'cgs' or self.units == 'SI':
@@ -1107,9 +1101,22 @@ class AGNsed_var(AGN):
             idx_mod_low = np.abs(band - band_width/2 - self.nu_grid).argmin()
             
             if idx_mod_up == idx_mod_low:
+                L_imp = Lrp_tot[idx_mod_up] * band_width #Total responding lcurve
+                L_d_imp = self.Ld_t_all[idx_mod_up] * band_width #disc component
+                L_w_imp = self.Lw_t_all[idx_mod_up] * band_width #warm component
+                L_h_imp = self.Lh_t_all[idx_mod_up] * band_width #hot component
                 L_int = L_int_all[idx_mod_up] * band_width
             
             else:
+                Limp_band = Lrp_tot[idx_mod_low:idx_mod_up+1]
+                L_imp = np.trapz(Limp_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                L_d_band = self.Ld_t_all[idx_mod_low:idx_mod_up+1]
+                L_d_imp = np.trapz(L_d_band, self.nu_grid[idx_mod_low:idx_mod_low+1])
+                
+                L_w_band = self.Lw_t_all[idx_mod_low:idx_mod_up+1]
+                #L_w_imp = np.trapz(L_w_band, self.nu_grid)
+                
                 Lint_band = L_int_all[idx_mod_low:idx_mod_up+1]
                 L_int = np.trapz(Lint_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
         
@@ -1215,7 +1222,7 @@ class AGNdark_var(AGN):
         """
         
         #getting properties definied in __init__ from AGN parent class
-        super().__init__(M, dist, log_mdot, astar, cosi, z)
+        super().__init__(M, dist, log_mdot, astar, cosi, hmax, z)
         
         #Reading remaining parameters
         self.kTe_c = kTe_c
@@ -1550,7 +1557,7 @@ class AGNdark_var(AGN):
         else:
             Lnu_dd = np.zeros(len(self.nu_grid))
         
-        if self.return_corona == True and self.r_c != self.risco:
+        if self.return_corona == True and self.r_d != self.risco:
             Lnu_c = self.Corona_spec()
         else:
             Lnu_c = np.zeros(len(self.nu_grid))
