@@ -122,8 +122,9 @@ class AGN:
         self.nu_grid = (self.Egrid * u.keV).to(u.Hz,
                                 equivalencies=u.spectral()).value
         
+        self.nu_obs = self.nu_grid/(1+self.z) #Observers frame
+        self.E_obs = self.Egrid/(1+self.z)        
         
-
     
     
     
@@ -994,6 +995,7 @@ class AGNsed_var(AGN):
     def generate_lightcurve(self, band, band_width, lxs=None, ts=None):
         """
         Generated a light-curve for a band centered on nu, with bandwidth dnu
+        Uses nu_obs/E_obs - as this is in observers frame
         
         Currently only does top-hat response/bandpass. Might be updated later.
         Returnes fluxes integrated over band_width.
@@ -1035,8 +1037,8 @@ class AGNsed_var(AGN):
         
         
         if self.units == 'SI' or self.units == 'cgs':
-            idx_mod_up = np.abs(band + band_width/2 - self.nu_grid).argmin()
-            idx_mod_low = np.abs(band - band_width/2 - self.nu_grid).argmin()
+            idx_mod_up = np.abs(band + band_width/2 - self.nu_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.nu_obs).argmin()
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
@@ -1046,15 +1048,15 @@ class AGNsed_var(AGN):
                 Lcurve = np.trapz(Lc_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
             
         elif self.units == 'counts':
-            idx_mod_up = np.abs(band + band_width/2 - self.Egrid).argmin()
-            idx_mod_low = np.abs(band - band_width/2 - self.Egrid).argmin()
+            idx_mod_up = np.abs(band + band_width/2 - self.E_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.E_obs).argmin()
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
             
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
-                Lcurve = np.trapz(Lc_band, self.Egrid[idx_mod_low:idx_mod_up+1], axis=0)
+                Lcurve = np.trapz(Lc_band, self.E_obs[idx_mod_low:idx_mod_up+1], axis=0)
         
         return Lcurve
     
@@ -1615,26 +1617,26 @@ class AGNdark_var(AGN):
         
         
         if self.units == 'SI' or self.units == 'cgs':
-            idx_mod_up = np.abs(band + band_width/2 - self.nu_grid).argmin()
-            idx_mod_low = np.abs(band - band_width/2 - self.nu_grid).argmin()
+            idx_mod_up = np.abs(band + band_width/2 - self.nu_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.nu_obs).argmin()
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
                 
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
-                Lcurve = np.trapz(Lc_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
+                Lcurve = np.trapz(Lc_band, self.nu_obs[idx_mod_low:idx_mod_up+1], axis=0)
             
         elif self.units == 'counts':
-            idx_mod_up = np.abs(band + band_width/2 - self.Egrid).argmin()
-            idx_mod_low = np.abs(band - band_width/2 - self.Egrid).argmin()
+            idx_mod_up = np.abs(band + band_width/2 - self.E_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.E_obs).argmin()
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
             
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
-                Lcurve = np.trapz(Lc_band, self.Egrid[idx_mod_low:idx_mod_up+1], axis=0)
+                Lcurve = np.trapz(Lc_band, self.E_obs[idx_mod_low:idx_mod_up+1], axis=0)
         
         return Lcurve
         
