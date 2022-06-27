@@ -201,7 +201,7 @@ class AGN:
         else:
             dist = self.dl/100
         
-        return Lnus/(4*np.pi*dist**2)
+        return Lnus/(4*np.pi*dist**2 * (1+self.z))
     
     
     def new_ear(self, ear):
@@ -352,7 +352,7 @@ class AGN:
         Frep *= (1 - self.A) 
         
         T4rep = Frep/sigma_sb
-        
+
         #T4rep = (Lx_t * H)/(4*np.pi * sigma_sb * 
         #                          (R**2 + H**2)**(3/2))
         return T4rep * (1 - self.A)
@@ -373,8 +373,8 @@ class AGN:
         Calculates luminosity distance to source
         """
         
-        self.Dl = self.D * (1+self.z) #In Mpc
-        self.dl = self.d * (1+self.z) #In cm
+        self.Dl = self.D# * (1+self.z) #In Mpc
+        self.dl = self.d# * (1+self.z) #In cm
     
     
     def delay_surf(self, r, phi):
@@ -629,9 +629,9 @@ class AGNsed_var(AGN):
         T4ann = self.calc_Ttot(r, Lx_t)
         Tann_mean = np.mean(T4ann**(1/4))
         bb_ann = self.bb_radiance_ann(Tann_mean)
-
+    
         Lnu_ann  = 4*np.pi*r*dr * self.Rg**2 * bb_ann #multiplying by dA to get actual normalisation
-        return Lnu_ann
+        return Lnu_ann, Tann_mean
 
         
     def disc_spec_t(self, Lx_t):
@@ -646,6 +646,7 @@ class AGNsed_var(AGN):
             Units : W
 
         """
+
         for i in range(len(self.logr_ad_bins) - 1):
             dr_bin = 10**self.logr_ad_bins[i+1] - 10**self.logr_ad_bins[i]
             rmid = 10**(self.logr_ad_bins[i] + self.dlog_r/2)
@@ -655,7 +656,7 @@ class AGNsed_var(AGN):
             else:
                 Lx_r = Lx_t[:, i]
                 
-            Lnu_r = self.disc_annuli(rmid, dr_bin, Lx_r)
+            Lnu_r, Tann = self.disc_annuli(rmid, dr_bin, Lx_r)
             
             if i == 0:
                 Lnu_all = Lnu_r
@@ -706,7 +707,7 @@ class AGNsed_var(AGN):
         kTann = (kTann * u.J).to(u.keV).value #converting T to keV for nthcomp
         
         ph_nth = donthcomp(self.Egrid, [self.gamma_w, self.kTe_w,
-                                        kTann, 1, 0])
+                                        kTann, 0, 0])
         ph_nth = (ph_nth * u.W/u.keV).to(u.W/u.Hz, 
                                             equivalencies=u.spectral()).value
         
@@ -792,7 +793,7 @@ class AGNsed_var(AGN):
         return kT_seed
     
     
-    def Lseed_hotCorona(self):
+    def Lseed_hotCorona(self, Ldiss):
         """
         Calculated luminsoty of seed photons emitted at radius r, intercepted
         by corona
@@ -815,7 +816,7 @@ class AGNsed_var(AGN):
             else:
                 cov_frac = 1
             
-            T4_ann = self.calc_Tnt(rmid)
+            T4_ann = self.calc_Ttot(rmid, Ldiss)
             
             Fr = sigma_sb * T4_ann
             Lr = 2 * 2*np.pi*rmid*dr * Fr * cov_frac/np.pi * self.Rg**2
@@ -840,9 +841,8 @@ class AGNsed_var(AGN):
         
         Ldiss, err = quad(lambda rc: 2*sigma_sb*self.calc_Tnt(rc) * 2*np.pi*rc * self.Rg**2,
                      self.risco, self.r_h)
-
-        Lseed = self.Lseed_hotCorona()
         
+        Lseed = self.Lseed_hotCorona(Ldiss)
         Lhot = Ldiss + Lseed
         return Lhot
     
@@ -891,8 +891,8 @@ class AGNsed_var(AGN):
             ts = ts - ts[0]
         
         #Now checking that light-curve flux is fractional
-        if np.mean(lxs) != 1:
-            lxs = lxs/np.mean(lxs)
+        #if np.mean(lxs) != 1:
+        #    lxs = lxs/np.mean(lxs)
         
         #getting mean hot spec - as this just goes up and down...
         #no time delay for this component...
@@ -907,6 +907,7 @@ class AGNsed_var(AGN):
         
         Lirr_ad = np.ndarray(np.shape(self.tau_ad))
         Lirr_wc = np.ndarray(np.shape(self.tau_wc))
+
         for j in range(len(ts)):
 
             Lin = np.append(Lin, [Lxs[j]])
@@ -942,12 +943,14 @@ class AGNsed_var(AGN):
                 Lw_all = Lw_t
                 Lh_all = Lh_t
                 Ltot_all = Ltot_t
+        
             
             else:
                 Ld_all = np.column_stack((Ld_all, Ld_t))
                 Lw_all = np.column_stack((Lw_all, Lw_t))
                 Lh_all = np.column_stack((Lh_all, Lh_t))
                 Ltot_all = np.column_stack((Ltot_all, Ltot_t))
+                
         
         
         self.Ld_t_all = self._new_units(Ld_all)
