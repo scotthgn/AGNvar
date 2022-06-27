@@ -46,23 +46,21 @@ k_B = const.k_B.value #Boltzmann const, J K^-1
 
 class AGN:
     """
-    Defines an AGN object for you to do 'funky' science on!
-    This class initiates an object like AGNSED (Kubota & Done 2018) - 
-    so you can now test this model against timing analysis!!!
+    Main AGN object - Defines all the general properties we expect to be the 
+    same across models. e.g efficiency, eddington luminosity, etc.
+    
+    Also deals with all the 'book-keeping' with regards to defining 
+    energy and radial grids, and dealing with units
     """
     
     Emin = 1e-4
     Emax = 1e4
-    numE = 500
+    numE = 1000
     mu = 0.55 #mean particle mass - fixed at solar abundances
     A = 0.3 #Disc albedo = fixed at 0.3 for now
     
     dr_dex = 40 #radial grid spacing - N points per decade
     dphi = 0.01 #azimuthal grid spacing
-    
-    return_disc = True #flags for what components to return
-    return_warm = True #Determined by the swithcing parameters
-    return_hot = True
     
     units = 'SI' #Default units to be returned
     as_flux = False
@@ -73,17 +71,10 @@ class AGN:
                  log_mdot,
                  astar,
                  cosi,
-                 kTe_h,
-                 kTe_w,
-                 gamma_h,
-                 gamma_w,
-                 r_h,
-                 r_w,
-                 log_rout,
                  hmax,
                  z):
         """
-        Initiates the AGN object - defines geometry
+        Initiates the AGN object 
 
         Parameters
         ----------
@@ -97,30 +88,6 @@ class AGN:
             Dimensionless spin parameter
         cosi : float
             cosine of inclination
-        kTe_h : float
-            Electron temperature for hot corona (high energy rollover)
-            If -ve ONLY hot component returned
-            Units : keV
-        kTe_w : float
-            Electron temperature for warm corona (high energy rollover)
-            Units : keV
-        gamma_h : float
-            Hot Compton photon index
-        gamma_w : float
-            Warm Compton photon index
-        r_h : float
-            Outer edge of hot corona (or inner edge of warm..)
-            If -ve uses risco
-            Units : Rg
-        r_w : float 
-            Outer edge of warm corona (or inner edge of standard disc)
-            If -ve uses risco
-            Units : Rg
-        log_rout : float
-            Outer edge of disc - units : Rg
-            If -ve uses r_sg
-        hmax : float
-            Max height of hot corona - units : Rg
         z : float
             Redshift (not currently doing anything - will be updated later)
         """
@@ -132,16 +99,8 @@ class AGN:
         self.a = astar
         self.cosinc = cosi
         self.inc = np.arccos(cosi)
-        self.kTe_h = kTe_h
-        self.kTe_w = kTe_w
-        self.gamma_h = gamma_h
-        self.gamma_w = gamma_w
-        self.r_h = r_h
-        self.r_w = r_w
-        self.r_out = 10**(log_rout)
         self.hmax = hmax
         self.z = z
-        
         
         #Calculating disc params 
         self._calc_risco()
@@ -149,52 +108,23 @@ class AGN:
         self._calc_Ledd()
         self._calc_efficiency()
         
-        if log_rout < 0:
-            self.r_out = self.r_sg
-        
         #physical conversion factors
         self.Mdot_edd = self.L_edd/(self.eta * c**2)
         self.Rg = (G * self.M)/(c**2)
         self._calc_Dl()
         
         
-        #Creating radial grid for each component
-        self.dlog_r = 1/self.dr_dex
-        self.logr_ad_bins = self._make_rbins(np.log10(self.r_w), np.log10(self.r_out))
-        self.logr_wc_bins = self._make_rbins(np.log10(self.r_h), np.log10(self.r_w))
-        
-        #If too narrow to create a bin with correct size, just set one bin
-        #instead
-        if len(self.logr_ad_bins) == 1:
-            self.logr_ad_bins = np.array([np.log10(self.r_w), np.log10(self.r_out)])
-        
-        if len(self.logr_wc_bins) == 1:
-            self.logr_wc_bins = np.array([np.log10(self.r_h), np.log10(self.r_w)])
-        
-     
         #Creating azimuthal bins
         self.phis = np.arange(0, 2*np.pi + self.dphi, self.dphi)
-        
-        
-         #Creating delay surface for warm region and disc
-        rd_mids = 10**(self.logr_ad_bins[:-1] + self.dlog_r/2)
-        rw_mids = 10**(self.logr_wc_bins[:-1] + self.dlog_r/2)
-        
-        rad_mesh, phi_admesh = np.meshgrid(rd_mids, self.phis)
-        rwc_mesh, phi_wcmesh = np.meshgrid(rw_mids, self.phis)
-        
-        self.tau_ad = self.delay_surf(rad_mesh, phi_admesh)
-        self.tau_wc = self.delay_surf(rwc_mesh, phi_wcmesh)
-
         
         #Energy/frequency grid
         self.Egrid = np.geomspace(self.Emin, self.Emax, self.numE)
         self.nu_grid = (self.Egrid * u.keV).to(u.Hz,
                                 equivalencies=u.spectral()).value
         
-        #Mean X-ray luminosity
-        self.Lx = self.hotCorona_lumin()
-
+        self.nu_obs = self.nu_grid/(1+self.z) #Observers frame
+        self.E_obs = self.Egrid/(1+self.z)        
+        
     
     
     
@@ -271,7 +201,7 @@ class AGN:
         else:
             dist = self.dl/100
         
-        return Lnus/(4*np.pi*dist**2)
+        return Lnus/(4*np.pi*dist**2 * (1+self.z))
     
     
     def new_ear(self, ear):
@@ -422,7 +352,7 @@ class AGN:
         Frep *= (1 - self.A) 
         
         T4rep = Frep/sigma_sb
-        
+
         #T4rep = (Lx_t * H)/(4*np.pi * sigma_sb * 
         #                          (R**2 + H**2)**(3/2))
         return T4rep * (1 - self.A)
@@ -443,8 +373,8 @@ class AGN:
         Calculates luminosity distance to source
         """
         
-        self.Dl = self.D * (1+self.z) #In Mpc
-        self.dl = self.d * (1+self.z) #In cm
+        self.Dl = self.D# * (1+self.z) #In Mpc
+        self.dl = self.d# * (1+self.z) #In cm
     
     
     def delay_surf(self, r, phi):
@@ -519,11 +449,6 @@ class AGN:
     
     
     
-
-    ##########################################################################
-    #---- Calculating spectra
-    ##########################################################################
-    
     def bb_radiance_ann(self, Ts):
         """
         Black-body radiance across the annulus
@@ -544,7 +469,140 @@ class AGN:
         Bnu = pre_fac / exp_fac
         
         return np.pi * Bnu
+
+
+
+##############################################################################
+#---- The main Composite models
+##############################################################################
+    
+    
+class AGNsed_var(AGN):
+    
+    """
+    This is essentially the same as AGNSED in XSPEC (Kubota & Done 2018),
+    however evolves it through time so you can do spectral timing analysis
+    """
+    
+    return_disc = True #flags for what components to return
+    return_warm = True #Determined by the swithcing parameters
+    return_hot = True
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 z):
+        """
+        Initiates the AGNsed object - defines geometry
+
+        Parameters
+        ----------
+        M : float
+            BH mass - units : Msol.
+        dist : float
+            Co-Moving distance - units : Mpc
+        log_mdot : float
+            log of mass accretion rate - units : L/Ledd
+        astar : float
+            Dimensionless spin parameter
+        cosi : float
+            cosine of inclination
+        kTe_h : float
+            Electron temperature for hot corona (high energy rollover)
+            Units : keV
+        kTe_w : float
+            Electron temperature for warm corona (high energy rollover)
+            Units : keV
+        gamma_h : float
+            Hot Compton photon index
+        gamma_w : float
+            Warm Compton photon index
+        r_h : float
+            Outer edge of hot corona (or inner edge of warm..)
+            If -ve uses risco
+            Units : Rg
+        r_w : float 
+            Outer edge of warm corona (or inner edge of standard disc)
+            If -ve uses risco
+            Units : Rg
+        log_rout : float
+            Outer edge of disc - units : Rg
+            If -ve uses r_sg
+        hmax : float
+            Max height of hot corona - units : Rg
+        z : float
+            Redshift (not currently doing anything - will be updated later)
+        """
         
+        #getting properties definied in __init__ from AGN parent class
+        super().__init__(M, dist, log_mdot, astar, cosi, hmax, z) 
+        
+        #Read remaining parameters
+        self.kTe_h = kTe_h
+        self.kTe_w = kTe_w
+        self.gamma_h = gamma_h
+        self.gamma_w = gamma_w
+        self.r_h = r_h
+        self.r_w = r_w
+        self.r_out = 10**(log_rout)
+        self.hmax = hmax
+        
+        
+        if log_rout < 0:
+            self.r_out = self.r_sg
+        
+        if r_h < 0:
+            self.r_h = self.risco
+        
+        if r_w < 0:
+            self.r_w = self.risco
+        elif r_w >= self.r_out:
+            self.r_w = self.r_out
+        
+        
+        #Creating radial grid for each component
+        self.dlog_r = 1/self.dr_dex
+        self.logr_ad_bins = self._make_rbins(np.log10(self.r_w), np.log10(self.r_out))
+        self.logr_wc_bins = self._make_rbins(np.log10(self.r_h), np.log10(self.r_w))
+        
+        #If too narrow to create a bin with correct size, just set one bin
+        #instead
+        if len(self.logr_ad_bins) == 1:
+            self.logr_ad_bins = np.array([np.log10(self.r_w), np.log10(self.r_out)])
+        
+        if len(self.logr_wc_bins) == 1:
+            self.logr_wc_bins = np.array([np.log10(self.r_h), np.log10(self.r_w)])
+            
+        
+        #Creating delay surface for warm region and disc
+        rd_mids = 10**(self.logr_ad_bins[:-1] + self.dlog_r/2)
+        rw_mids = 10**(self.logr_wc_bins[:-1] + self.dlog_r/2)
+        
+        self.rad_mesh, self.phi_admesh = np.meshgrid(rd_mids, self.phis)
+        self.rwc_mesh, self.phi_wcmesh = np.meshgrid(rw_mids, self.phis)
+        
+        self.tau_ad = self.delay_surf(self.rad_mesh, self.phi_admesh)
+        self.tau_wc = self.delay_surf(self.rwc_mesh, self.phi_wcmesh)
+        
+        #Mean X-ray luminosity
+        self.Lx = self.hotCorona_lumin()
+        
+    
+    
+    ##########################################################################
+    #---- Calculate spectra
+    ##########################################################################
     
     def disc_annuli(self, r, dr, Lx_t):
         """
@@ -571,9 +629,9 @@ class AGN:
         T4ann = self.calc_Ttot(r, Lx_t)
         Tann_mean = np.mean(T4ann**(1/4))
         bb_ann = self.bb_radiance_ann(Tann_mean)
-
+    
         Lnu_ann  = 4*np.pi*r*dr * self.Rg**2 * bb_ann #multiplying by dA to get actual normalisation
-        return Lnu_ann
+        return Lnu_ann, Tann_mean
 
         
     def disc_spec_t(self, Lx_t):
@@ -588,6 +646,7 @@ class AGN:
             Units : W
 
         """
+
         for i in range(len(self.logr_ad_bins) - 1):
             dr_bin = 10**self.logr_ad_bins[i+1] - 10**self.logr_ad_bins[i]
             rmid = 10**(self.logr_ad_bins[i] + self.dlog_r/2)
@@ -597,7 +656,7 @@ class AGN:
             else:
                 Lx_r = Lx_t[:, i]
                 
-            Lnu_r = self.disc_annuli(rmid, dr_bin, Lx_r)
+            Lnu_r, Tann = self.disc_annuli(rmid, dr_bin, Lx_r)
             
             if i == 0:
                 Lnu_all = Lnu_r
@@ -648,7 +707,7 @@ class AGN:
         kTann = (kTann * u.J).to(u.keV).value #converting T to keV for nthcomp
         
         ph_nth = donthcomp(self.Egrid, [self.gamma_w, self.kTe_w,
-                                        kTann, 1, 0])
+                                        kTann, 0, 0])
         ph_nth = (ph_nth * u.W/u.keV).to(u.W/u.Hz, 
                                             equivalencies=u.spectral()).value
         
@@ -734,7 +793,7 @@ class AGN:
         return kT_seed
     
     
-    def Lseed_hotCorona(self):
+    def Lseed_hotCorona(self, Ldiss):
         """
         Calculated luminsoty of seed photons emitted at radius r, intercepted
         by corona
@@ -757,7 +816,7 @@ class AGN:
             else:
                 cov_frac = 1
             
-            T4_ann = self.calc_Tnt(rmid)
+            T4_ann = self.calc_Ttot(rmid, Ldiss)
             
             Fr = sigma_sb * T4_ann
             Lr = 2 * 2*np.pi*rmid*dr * Fr * cov_frac/np.pi * self.Rg**2
@@ -782,9 +841,8 @@ class AGN:
         
         Ldiss, err = quad(lambda rc: 2*sigma_sb*self.calc_Tnt(rc) * 2*np.pi*rc * self.Rg**2,
                      self.risco, self.r_h)
-
-        Lseed = self.Lseed_hotCorona()
         
+        Lseed = self.Lseed_hotCorona(Ldiss)
         Lhot = Ldiss + Lseed
         return Lhot
     
@@ -826,19 +884,15 @@ class AGN:
             X-ray light-curve.
         ts : 1D-array
             Corresponding time stamps.
-
-        Returns
-        -------
-        None.
-
+            
         """
         #First checking that beginning of time array is 0!
         if ts[0] != 0:
             ts = ts - ts[0]
         
         #Now checking that light-curve flux is fractional
-        if np.mean(lxs) != 1:
-            lxs = lxs/np.mean(lxs)
+        #if np.mean(lxs) != 1:
+        #    lxs = lxs/np.mean(lxs)
         
         #getting mean hot spec - as this just goes up and down...
         #no time delay for this component...
@@ -853,6 +907,7 @@ class AGN:
         
         Lirr_ad = np.ndarray(np.shape(self.tau_ad))
         Lirr_wc = np.ndarray(np.shape(self.tau_wc))
+
         for j in range(len(ts)):
 
             Lin = np.append(Lin, [Lxs[j]])
@@ -888,12 +943,14 @@ class AGN:
                 Lw_all = Lw_t
                 Lh_all = Lh_t
                 Ltot_all = Ltot_t
+        
             
             else:
                 Ld_all = np.column_stack((Ld_all, Ld_t))
                 Lw_all = np.column_stack((Lw_all, Lw_t))
                 Lh_all = np.column_stack((Lh_all, Lh_t))
                 Ltot_all = np.column_stack((Ltot_all, Ltot_t))
+                
         
         
         self.Ld_t_all = self._new_units(Ld_all)
@@ -941,8 +998,14 @@ class AGN:
     def generate_lightcurve(self, band, band_width, lxs=None, ts=None):
         """
         Generated a light-curve for a band centered on nu, with bandwidth dnu
+        Uses nu_obs/E_obs - as this is in observers frame
         
         Currently only does top-hat response/bandpass. Might be updated later.
+        Returnes fluxes integrated over band_width.
+        So units will be:
+            W/m^2         - for SI
+            ergs/s/cm^2   - for cgs
+            counts/s/cm^s - for counts
         
         Input MUST be in whatever units you have set units to be!!!
         i.e if cgs of SI - then Hz,
@@ -977,8 +1040,8 @@ class AGN:
         
         
         if self.units == 'SI' or self.units == 'cgs':
-            idx_mod_up = np.abs(band + band_width/2 - self.nu_grid).argmin()
-            idx_mod_low = np.abs(band - band_width/2 - self.nu_grid).argmin()
+            idx_mod_up = np.abs(band + band_width/2 - self.nu_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.nu_obs).argmin()
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
@@ -988,15 +1051,15 @@ class AGN:
                 Lcurve = np.trapz(Lc_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
             
         elif self.units == 'counts':
-            idx_mod_up = np.abs(band + band_width/2 - self.Egrid).argmin()
-            idx_mod_low = np.abs(band - band_width/2 - self.Egrid).argmin()
+            idx_mod_up = np.abs(band + band_width/2 - self.E_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.E_obs).argmin()
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
             
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
-                Lcurve = np.trapz(Lc_band, self.Egrid[idx_mod_low:idx_mod_up+1], axis=0)
+                Lcurve = np.trapz(Lc_band, self.E_obs[idx_mod_low:idx_mod_up+1], axis=0)
         
         return Lcurve
     
@@ -1023,13 +1086,8 @@ class AGN:
         band_width : float
             Band width - units : Hz/keV.
 
-        Returns
-        -------
-        irf_comp : dict
-            Dictionary containing impulse response functions for each model
-            component
-
         """
+        
         tau_max = self.delay_surf(self.r_out, np.pi)
         self.t_imp = np.linspace(0, tau_max, 200) #Time array for impulse L-curve
         Tg = (self.Rg/c)/(24*3600) #Light travel time for 1 Rg in days
@@ -1041,7 +1099,6 @@ class AGN:
 
         
         Lrp_tot = self.evolve_spec(x_imp, self.t_imp)
-        L_imp = self.generate_lightcurve(band, band_width)
         L_int_all = self.mean_spec()
         
         if self.units == 'cgs' or self.units == 'SI':
@@ -1049,9 +1106,22 @@ class AGN:
             idx_mod_low = np.abs(band - band_width/2 - self.nu_grid).argmin()
             
             if idx_mod_up == idx_mod_low:
+                L_imp = Lrp_tot[idx_mod_up] * band_width #Total responding lcurve
+                L_d_imp = self.Ld_t_all[idx_mod_up] * band_width #disc component
+                L_w_imp = self.Lw_t_all[idx_mod_up] * band_width #warm component
+                L_h_imp = self.Lh_t_all[idx_mod_up] * band_width #hot component
                 L_int = L_int_all[idx_mod_up] * band_width
             
             else:
+                Limp_band = Lrp_tot[idx_mod_low:idx_mod_up+1]
+                L_imp = np.trapz(Limp_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                L_d_band = self.Ld_t_all[idx_mod_low:idx_mod_up+1]
+                L_d_imp = np.trapz(L_d_band, self.nu_grid[idx_mod_low:idx_mod_low+1])
+                
+                L_w_band = self.Lw_t_all[idx_mod_low:idx_mod_up+1]
+                #L_w_imp = np.trapz(L_w_band, self.nu_grid)
+                
                 Lint_band = L_int_all[idx_mod_low:idx_mod_up+1]
                 L_int = np.trapz(Lint_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
         
@@ -1096,8 +1166,590 @@ class AGN:
         return T, delays
 
 
+
+class AGNdark_var(AGN):
+    
+    """
+    A model where you have a standard disc extending to risco. However below
+    some darkeining radius, r_d, all accretion power is transported to the corona
+    (probably through magnetic fields or something...)
+    Hence, in the region r_d to risco, you only see the contribution due to 
+    re-processing
+    """
+    
+    return_AD = True #Flags for neglecting/including components
+    return_DD = True
+    return_corona = True
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_c,
+                 gamma_c,
+                 r_d,
+                 log_rout,
+                 hmax,
+                 z):
+        """
+        Initiates AGNdark object
+
+        Parameters
+        ----------
+        M : float
+            BH mass - units : Msol.
+        dist : float
+            Co-Moving distance - units : Mpc
+        log_mdot : float
+            log of mass accretion rate - units : L/Ledd
+        astar : float
+            Dimensionless spin parameter
+        cosi : float
+            cosine of inclination
+        kTe_c : float
+            Electron temperature for corona (high energy rollover)
+            Units : keV
+        gamma_c : float
+            Corona photon index
+        r_d : float
+            Disc darkening radius
+            If -ve uses risco
+            Units : Rg
+        log_rout : float
+            Outer edge of disc - units : Rg
+            If -ve uses r_sg
+        hmax : float
+            Max height of hot corona - units : Rg
+        z : float
+            Redshift (not currently doing anything - will be updated later)
+        """
+        
+        #getting properties definied in __init__ from AGN parent class
+        super().__init__(M, dist, log_mdot, astar, cosi, hmax, z)
+        
+        #Reading remaining parameters
+        self.kTe_c = kTe_c
+        self.gamma_c = gamma_c
+        self.r_d = r_d
+        self.r_out = 10**(log_rout)
+        self.hmax = hmax
+        
+        
+        if log_rout < 0:
+            self.r_out = self.r_sg
+        
+        if r_d < 0:
+            self.r_d = self.risco
+        
+        
+        #Creating radial grid for each component
+        self.dlog_r = 1/self.dr_dex
+        self.logr_ad_bins = self._make_rbins(np.log10(self.r_d), np.log10(self.r_out))
+        self.logr_dd_bins = self._make_rbins(np.log10(self.risco), np.log10(self.r_d))
+        
+        #If too narrow to create a bin with correct size, just set one bin
+        #instead
+        if len(self.logr_ad_bins) == 1:
+            self.logr_ad_bins = np.array([np.log10(self.r_d), np.log10(self.r_out)])
+        
+        if len(self.logr_dd_bins) == 1:
+            self.logr_dd_bins = np.array([np.log10(self.risco), np.log10(self.r_d)])
+        
+        
+        #Creating delay surface for dark region and disc
+        rad_mids = 10**(self.logr_ad_bins[:-1] + self.dlog_r/2)
+        rdd_mids = 10**(self.logr_dd_bins[:-1] + self.dlog_r/2)
+        
+        rad_mesh, phi_admesh = np.meshgrid(rad_mids, self.phis)
+        rdd_mesh, phi_ddmesh = np.meshgrid(rdd_mids, self.phis)
+        
+        self.tau_ad = self.delay_surf(rad_mesh, phi_admesh)
+        self.tau_dd = self.delay_surf(rdd_mesh, phi_ddmesh)
+        
+        #X-ray luminosity
+        self.Lx = self.Corona_lumin()
+    
+    
+    
+    ##########################################################################
+    #---- Calculate spectra
+    ##########################################################################
+    
+    def AD_annuli(self, r, dr, Lx_t):
+        """
+        Calculates contribution from standard disc annulus as time t
+
+        Parameters
+        ----------
+        r : float
+            Annulus midpoint - units : Rg.
+        dr : float
+            Annulus width - units : Rg.
+        Lx_t : 1D-array - shape = shape(self.phis)
+            X-ray luminosity seen at each point around the annulus at time t.
+
+        """
+        T4ann = self.calc_Ttot(r, Lx_t)
+        Tann_mean = np.mean(T4ann**(1/4))
+        bb_ann = self.bb_radiance_ann(Tann_mean)
+
+        Lnu_ann  = 4*np.pi*r*dr * self.Rg**2 * bb_ann #multiplying by dA to get actual normalisation
+        return Lnu_ann
+    
+    
+    def AD_spec_t(self, Lx_t):
+        """
+        Calculates total standard disc spectrum, given an incident luminosity Lx(t)
+
+        Parameters
+        ----------
+        Lx_t : float OR 2D-array - shape = [N_rbin - 1, N_phi]
+            Incident luminosity seen at each point on disc at time t.
+            IF float then assume constant irradiation across disc
+            Units : W
+
+        """
+        for i in range(len(self.logr_ad_bins) - 1):
+            dr_bin = 10**self.logr_ad_bins[i+1] - 10**self.logr_ad_bins[i]
+            rmid = 10**(self.logr_ad_bins[i] + self.dlog_r/2)
+            
+            if np.ndim(Lx_t) == 0:
+                Lx_r = Lx_t
+            else:
+                Lx_r = Lx_t[:, i]
+                
+            Lnu_r = self.AD_annuli(rmid, dr_bin, Lx_r)
+            
+            if i == 0:
+                Lnu_all = Lnu_r
+            else:
+                Lnu_all = np.column_stack((Lnu_all, Lnu_r))
+        
+        if np.shape(Lnu_all) != np.shape(self.Egrid):
+            Lnu_tot = np.sum(Lnu_all, axis=-1)
+        else:
+            Lnu_tot = Lnu_all
+        
+        return Lnu_tot *self.cosinc/0.5
+    
+    
+    def DD_annuli(self, r, dr, Lx_t):
+        """
+        Calculates contribution from annulus in dark disc region
+
+        Parameters
+        ----------
+        r : float
+            Annulus midpoint - units : Rg.
+        dr : float
+            Annulus width - units : Rg.
+        Lx_t : 1D-array - shape = shape(self.phis)
+            X-ray luminosity seen at each point around the annulus at time t.
+
+        """
+        T4ann = self.calc_Trep(r, Lx_t) #Only contribution from re-processed!
+        Tann_mean = np.mean(T4ann**(1/4))
+        bb_ann = self.bb_radiance_ann(Tann_mean)
+
+        Lnu_ann  = 4*np.pi*r*dr * self.Rg**2 * bb_ann #multiplying by dA to get actual normalisation
+        return Lnu_ann
+        
+    
+    def DD_spec_t(self, Lx_t):
+        """
+        Calculates total dark disc spectrum, given an incident luminosity Lx(t)
+
+        Parameters
+        ----------
+        Lx_t : float OR 2D-array - shape = [N_rbin - 1, N_phi]
+            Incident luminosity seen at each point on disc at time t.
+            IF float then assume constant irradiation across disc
+            Units : W
+
+        """
+        for i in range(len(self.logr_dd_bins) - 1):
+            dr_bin = 10**self.logr_dd_bins[i+1] - 10**self.logr_dd_bins[i]
+            rmid = 10**(self.logr_dd_bins[i] + self.dlog_r/2)
+            
+            if np.ndim(Lx_t) == 0:
+                Lx_r = Lx_t
+            else:
+                Lx_r = Lx_t[:, i]
+                
+            Lnu_r = self.DD_annuli(rmid, dr_bin, Lx_r)
+            
+            if i == 0:
+                Lnu_all = Lnu_r
+            else:
+                Lnu_all = np.column_stack((Lnu_all, Lnu_r))
+        
+        if np.shape(Lnu_all) != np.shape(self.Egrid):
+            Lnu_tot = np.sum(Lnu_all, axis=-1)
+        else:
+            Lnu_tot = Lnu_all
+        
+        return Lnu_tot *self.cosinc/0.5
+    
+    
+    """
+    The coronal section
+    Assuming this is generated through Compton scattering
+    """
+    
+    def Corona_lumin(self):
+        """
+        Coronal luminosity - in this model simply dissipated accretion energy
+        between r_d and risco
+
+        """
+        
+        Lc, err = quad(lambda rc: sigma_sb*self.calc_Tnt(rc) * 4*np.pi*rc * self.Rg**2,
+                       self.risco, self.r_d)
+        
+        return Lc
+
+    def seed_temp(self):
+        """
+        Calculates seed photon temperature of photons being transported to
+        the corona.
+        For simplicity set T_seed = T_NT(risco + dr/2)
+
+        """
+        redge = 10**(np.log10(self.risco) + self.dlog_r/2) #avoiding 0 at inner edge
+        T4_edge = self.calc_Tnt(redge) #inner disc T in K
+        Tedge = T4_edge**(1/4)
+        
+        kT_edge = k_B * Tedge #units J
+        kT_seed = (kT_edge * u.J).to(u.keV).value
+        
+        return kT_seed
+    
+    
+    def Corona_spec(self):
+        """
+        Calculates spec from corona - assume generated through 
+        Compton scattering (so will look like cut off power law)
+        
+        Not including any time-dependece in this part, as we assume all 
+        corona has 0 time delay. SO will be explicitly given by input x-ray
+        light-curve in method for handling time evolution
+        
+        """
+        kTseed = self.seed_temp()
+        Lum = self.Corona_lumin()
+        if kTseed < self.kTe_c:
+            ph_hot = donthcomp(self.Egrid, [self.gamma_c, self.kTe_c, kTseed, 1, 0])
+            ph_hot = (ph_hot * u.W/u.keV).to(u.W/u.Hz, 
+                                            equivalencies=u.spectral()).value
+        
+            Lnu_hot = Lum * (ph_hot/np.trapz(ph_hot, self.nu_grid))
+        
+        else:
+            Lnu_hot = np.zeros(len(self.Egrid))
+            
+        return Lnu_hot
+    
+    
+    
+    
+    ##########################################################################
+    #---- Spectral Evolution
+    ##########################################################################
+    
+    def evolve_spec(self, lxs, ts):
+        """
+        Evolves the spectral model according to an input x-ray light-curve
+
+        Parameters
+        ----------
+        lxs : 1D-array
+            X-ray light-curve.
+        ts : 1D-array
+            Corresponding time stamps.
+            
+        """
+        
+        #First checking that beginning of time array is 0!
+        if ts[0] != 0:
+            ts = ts - ts[0]
+        
+        #Now checking that light-curve flux is fractional
+        if np.mean(lxs) != 1:
+            lxs = lxs/np.mean(lxs)
+        
+        #getting mean coronal spec - as this just goes up and down...
+        #no time delay for this component...
+        if self.return_corona == True:
+            Lc_mean = self.Corona_spec()
+        else:
+            Lc_mean = np.zeros(len(self.nu_grid))
+        
+        
+        #Now evolving light-curves!
+        Lxs = lxs * self.Lx #array of x-ray lums
+        Lin = np.array([self.Lx]) #array of Ls in play
+        
+        Lirr_ad = np.ndarray(np.shape(self.tau_ad))
+        Lirr_dd = np.ndarray(np.shape(self.tau_dd))
+        for j in range(len(ts)):
+
+            Lin = np.append(Lin, [Lxs[j]])
+            if j == 0:
+                t_delay = np.array([np.inf])
+            else:
+                t_delay += ts[j] - ts[j-1] #Adding time step to delay array
+            
+            t_delay = np.append(t_delay, [0]) #Appending 0 for current emitted
+            
+            #Sorting irradiation arrays
+            for k in range(len(t_delay)):
+                Lirr_ad[self.tau_ad <= t_delay[k]] = Lin[k]
+                Lirr_dd[self.tau_dd <= t_delay[k]] = Lin[k]
+            
+            #Evolving spectral components
+            if self.return_AD == True and len(self.logr_ad_bins) > 1:
+                Lad_t = self.AD_spec_t(Lirr_ad)
+            else:
+                Lad_t = np.zeros(len(self.nu_grid))
+            
+            if self.return_DD == True and len(self.logr_dd_bins) > 1:
+                Ldd_t = self.DD_spec_t(Lirr_dd)
+            else:
+                Ldd_t = np.zeros(len(self.nu_grid))
+            
+            Lc_t = Lc_mean * lxs[j]
+            Ltot_t = Lad_t + Ldd_t + Lc_t
+            
+            if j == 0:
+                Lad_all = Lad_t
+                Ldd_all = Ldd_t
+                Lc_all = Lc_t
+                Ltot_all = Ltot_t
+            
+            else:
+                Lad_all = np.column_stack((Lad_all, Lad_t))
+                Ldd_all = np.column_stack((Ldd_all, Ldd_t))
+                Lc_all = np.column_stack((Lc_all, Lc_t))
+                Ltot_all = np.column_stack((Ltot_all, Ltot_t))
+        
+        
+        self.Lad_t_all = self._new_units(Lad_all)
+        self.Ldd_t_all = self._new_units(Ldd_all)
+        self.Lc_t_all = self._new_units(Lc_all)
+        self.Ltot_t_all = self._new_units(Ltot_all)
+        return self.Ltot_t_all
+    
+    
+    def mean_spec(self):
+        """
+        Calculated the mean spectrum + each component
+        Uses X-ray luminosity derived from model for irradiation
+        """
+        
+        #disc component
+        #including condition on r_bin to avoid resolution error
+        #if you absoltely want to see tiny contributions then increase radial resolution
+        if self.return_AD == True and len(self.logr_ad_bins) > 1:
+            Lnu_ad = self.AD_spec_t(self.Lx)
+        else:
+            Lnu_ad = np.zeros(len(self.nu_grid))
+        
+        #warm component
+        if self.return_DD == True and len(self.logr_dd_bins) > 1:
+            Lnu_dd = self.DD_spec_t(self.Lx)
+        else:
+            Lnu_dd = np.zeros(len(self.nu_grid))
+        
+        if self.return_corona == True and self.r_d != self.risco:
+            Lnu_c = self.Corona_spec()
+        else:
+            Lnu_c = np.zeros(len(self.nu_grid))
+        
+        Ltot = Lnu_ad + Lnu_dd + Lnu_c
+        
+        self.Lnu_ad = self._new_units(Lnu_ad)
+        self.Lnu_dd = self._new_units(Lnu_dd)
+        self.Lnu_c = self._new_units(Lnu_c)
+        self.Lnu_tot = self._new_units(Ltot)
+        return self.Lnu_tot
+    
+    
+    def generate_lightcurve(self, band, band_width, lxs=None, ts=None):
+        """
+        Generated a light-curve for a band centered on nu, with bandwidth dnu
+        
+        Currently only does top-hat response/bandpass. Might be updated later.
+        Returnes fluxes integrated over band_width.
+        So units will be:
+            W/m^2         - for SI
+            ergs/s/cm^2   - for cgs
+            counts/s/cm^s - for counts
+        
+        Input MUST be in whatever units you have set units to be!!!
+        i.e if cgs of SI - then Hz,
+            if counts - then keV
+        IF you have NOT set any units - then default is currently SI, and you
+        need to pass band in Hz
+        
+        NOTE: If band_width smaller than bin-width in model grid, then model bin width
+        used instead!
+        Parameters
+        ----------
+        band : float
+            Midpoint in bandpass - units : Hz OR keV.
+        band_width : float
+            Bandwidth - units : Hz or keV.
+        lxs : 1D-array, OPTIONAL
+            X-ray light-curve - only needed if evolved spec NOT already calculated
+        ts : 1D-array, OPTIONAL
+            Light-curve time stamps
+
+        """
+        
+        if hasattr(self, 'Ltot_t_all'):
+            Ltot_all = self.Ltot_t_all
+        else:
+            if lxs == None:
+                raise ValueError('NONE type light-curve not permitted!! \n'
+                                 'Either run evolve_spec() FIRST \n'
+                                 'OR pass a light-curve here!')
+            else:    
+                Ltot_all = self.evolve_spec(lxs, ts)
+        
+        
+        if self.units == 'SI' or self.units == 'cgs':
+            idx_mod_up = np.abs(band + band_width/2 - self.nu_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.nu_obs).argmin()
+            
+            if idx_mod_up == idx_mod_low:
+                Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                
+            else:
+                Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
+                Lcurve = np.trapz(Lc_band, self.nu_obs[idx_mod_low:idx_mod_up+1], axis=0)
+            
+        elif self.units == 'counts':
+            idx_mod_up = np.abs(band + band_width/2 - self.E_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.E_obs).argmin()
+            
+            if idx_mod_up == idx_mod_low:
+                Lcurve = Ltot_all[idx_mod_up, :] * band_width
+            
+            else:
+                Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
+                Lcurve = np.trapz(Lc_band, self.E_obs[idx_mod_low:idx_mod_up+1], axis=0)
+        
+        return Lcurve
+        
+
+
+
+
+##############################################################################
+#---- Sub-models (i.e extracting just disc, or just warm Comp etc..)
+##############################################################################
+
+class AGNdisc_var(AGNsed_var):
+    """
+    If you only want to see the standard accretion disc contribution from
+    the AGNsed model
+    
+    Essentuially this class takes care of dealing with switching parameters
+    within AGNsed_var so you dont have to!
+    """
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 z):
+        
+        super().__init__(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h, 
+                         gamma_w, r_h, r_w, log_rout, hmax, z)
+        
+        self.return_hot = False
+        self.return_warm = False
+
+
+class AGNwarm_var(AGNsed_var):
+    """
+    If you only want to see the warm Compton contribution from
+    the AGNsed model
+    
+    """
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar, 
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 z):
+        
+        super().__init__(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h, 
+                         gamma_w, r_h, r_w, log_rout, hmax, z)
+        
+        self.return_disc = False
+        self.return_hot = False
+        
+
+class AGNhot_var(AGNsed_var):
+    """
+    If you only wish to see the hot Compton contribution from the AGNsed
+    model
+    """
+    
+    def __init__(self,
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 z):
+        
+        super().__init__(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h,
+                         gamma_w, r_h, r_w, log_rout, hmax, z)
+        
+        self.return_disc = False
+        self.return_warm = False
+    
+
+
+##############################################################################
+#---- Testing 
+##############################################################################
 if __name__ == '__main__': 
 
+    
+    
     import matplotlib.pyplot as plt
     
     M = 2e8
@@ -1116,28 +1768,31 @@ if __name__ == '__main__':
     z = 0
     
     np.random.seed(123)
-    myagn = AGN(M, dist, lmdot, astar, cosi, kTe_h, kTe_w, gamma_h, gamma_w,
-                r_h, r_w, log_rout, hmax, z)
+    #myagn = AGNsed_var(M, dist, lmdot, astar, cosi, kTe_h, kTe_w, gamma_h, gamma_w,
+    #            r_h, r_w, log_rout, hmax, z)
     
+    myagn = AGNdark_var(M, dist, lmdot, astar, cosi, kTe_h, gamma_h, r_h, 
+                        log_rout, hmax, z)
     
+    print(myagn.risco)
     myagn.set_cgs()
     myagn.set_flux()
     ts_test = np.arange(0, 100, 1)
     lfracs = np.random.rand(len(ts_test)) + 0.5
     
     datdir = '/home/wljw75/Documents/phd/Fairall9_lightCurveCampaign/lightcurves/fourierAnalysis/F9_FourierReduced_Normalised_Interpolated_and_ReBinned_V1/'
-    """
+    
     ts, fx = np.loadtxt(datdir + 'HX.dat', usecols=(0, 1), unpack=True)
     ts2, fu = np.loadtxt(datdir + 'W2.dat', usecols=(0, 1), unpack=True)
 
     #myagn.return_disc = False
     #myagn.return_hot = False
     Lev = myagn.evolve_spec(fx, ts)
-    """
+    
     nus = myagn.nu_grid
     nu_u2 = (1928 * u.AA).to(u.Hz, equivalencies=u.spectral()).value
     idx15 = np.abs(nu_u2 - nus).argmin()
-    """
+    
     lcurve_phy = myagn.generate_lightcurve(nu_u2, 0.1 * nu_u2)
     lcurve = lcurve_phy/np.mean(lcurve_phy)
     
@@ -1148,7 +1803,7 @@ if __name__ == '__main__':
     plt.plot(ts2, fu)
     plt.plot(ts, lcurve)
     plt.show()
-    
+    """
     
     #Testing spectrum
     Lnu_tot = myagn.mean_spec()
@@ -1165,7 +1820,7 @@ if __name__ == '__main__':
     plt.ylim(1e-12, 1e-10)
     plt.xlim(1e14, 1e20)
     plt.show()
-    """
+    
     #Testing response
     
     myagn.return_disc = False
@@ -1197,4 +1852,4 @@ if __name__ == '__main__':
     
     plt.plot(tau, Ttot, color='k')
     plt.show()
-    
+    """
