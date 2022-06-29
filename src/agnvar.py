@@ -218,6 +218,7 @@ class AGN:
         self.nu_grid = (self.Egrid * u.keV).to(u.Hz,
                                 equivalencies=u.spectral()).value
         self.nu_obs = self.nu_grid/(1 + self.z) #Observers frame
+        self.E_obs = self.Egrid/(1 + self.z)
         
         self.Emin = min(self.Egrid)
         self.Emax = max(self.Egrid)
@@ -347,7 +348,7 @@ class AGN:
         R = r * self.Rg
         H = self.hmax * self.Rg
         
-        Frep = (0.5*Lx_t)/(4*np.pi * (R**2 + H**2))
+        Frep = (Lx_t)/(4*np.pi * (R**2 + H**2))
         Frep *= H/np.sqrt(R**2 + H**2)
         Frep *= (1 - self.A) 
         
