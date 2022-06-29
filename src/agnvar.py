@@ -347,7 +347,7 @@ class AGN:
         R = r * self.Rg
         H = self.hmax * self.Rg
         
-        Frep = (0.5*Lx_t)/(4*np.pi * (R**2 + H**2))
+        Frep = (Lx_t)/(4*np.pi * (R**2 + H**2))
         Frep *= H/np.sqrt(R**2 + H**2)
         Frep *= (1 - self.A) 
         
