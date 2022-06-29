@@ -218,6 +218,7 @@ class AGN:
         self.nu_grid = (self.Egrid * u.keV).to(u.Hz,
                                 equivalencies=u.spectral()).value
         self.nu_obs = self.nu_grid/(1 + self.z) #Observers frame
+        self.E_obs = self.Egrid/(1 + self.z)
         
         self.Emin = min(self.Egrid)
         self.Emax = max(self.Egrid)
