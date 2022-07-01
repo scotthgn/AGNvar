@@ -10,9 +10,6 @@ Created on Fri Apr  1 10:56:36 2022
 Module to define an AGN geometry - and then calculate spectra, impulse response
 functions, and model light-curves (based off an input HX light-curve).
 
-Uses the models defined within the model_bin/ directory - this is more of a 
-user end to make combining the models easier... If you want to play around
-with the models directly, then have a look in the model_bin!
 """
 
 
