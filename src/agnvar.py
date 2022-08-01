@@ -540,7 +540,7 @@ class AGNsed_var(AGN):
         hmax : float
             Max height of hot corona - units : Rg
         z : float
-            Redshift (not currently doing anything - will be updated later)
+            Redshift 
         """
         
         #getting properties definied in __init__ from AGN parent class
@@ -1162,6 +1162,543 @@ class AGNsed_var(AGN):
         norm = 1/np.trapz(T, delays)
         T *= norm
         return T, delays
+    
+
+
+
+
+
+
+class AGNbiconTH_var(AGNsed_var):
+    """
+    This model follows AGNVAR, however with the addition of a thermal
+    component, assumed to be originating as from re-processing off a clumpy
+    wind.
+    
+    This is the (VERY) simple version, where the wind is assumed to be bi-conical,
+    and have constant outlflow velocity - for now we do not consider any doppler
+    shifting or broadening. Hence, the only additional parameters
+    (compared to agnsed) are wind launch radius, launch angle (w.r.t) the disc,
+    covering fraction, total wind luminosity, and temperature.
+    
+    As this is a continuation of AGNsed_var, the assumed geomtery goes as:
+        -Hot inner flow (X-ray corona)
+        -Warm Comptonized region
+        -Standard disc
+        -Clumpy outflow/wind
+    
+    Note! If applying to data ALWAYS model the SED first, using
+    AGNSED (or a version of this) + a black-body component (for the outflow).
+    This allows you to contrain wind luminosity and temperature 
+    """
+    
+    return_wind = True
+    w_points = 100 #Nr of grid points along wind streamline - Currently linear spacing
+    dphi_w = 0.001 #phi grid for wind - Needs to be better sampled than disc in order to converge!
+    
+    def __init__(self, 
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 r_l,
+                 theta_wind,
+                 cov_wind,
+                 T_wind,
+                 z):
+        
+        """
+        Initiates the AGNbiconTH object - defines geometry
+
+        Parameters
+        ----------
+        M : float
+            BH mass - units : Msol.
+        dist : float
+            Co-Moving distance - units : Mpc
+        log_mdot : float
+            log of mass accretion rate - units : L/Ledd
+        astar : float
+            Dimensionless spin parameter
+        cosi : float
+            cosine of inclination
+        kTe_h : float
+            Electron temperature for hot corona (high energy rollover)
+            Units : keV
+        kTe_w : float
+            Electron temperature for warm corona (high energy rollover)
+            Units : keV
+        gamma_h : float
+            Hot Compton photon index
+        gamma_w : float
+            Warm Compton photon index
+        r_h : float
+            Outer edge of hot corona (or inner edge of warm..)
+            If -ve uses risco
+            Units : Rg
+        r_w : float 
+            Outer edge of warm corona (or inner edge of standard disc)
+            If -ve uses risco
+            Units : Rg
+        log_rout : float
+            Outer edge of disc - units : Rg
+            If -ve uses r_sg
+        hmax : float
+            Max height of hot corona - units : Rg
+        r_l : float
+            Wind/outflow launch radius - units : Rg
+        theta_wind : float
+            Wind/outlfow bi-con angle, w.r.t the disc - units : deg
+        cov_wind : float
+            Wind covering fraction - units : dOmega/4pi
+        T_wind : float
+            Wind emission temperature (for BB emission) - units : K
+        z : float
+            Redshift
+        """
+        
+        super().__init__(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h,
+                       gamma_w, r_h, r_w, log_rout, hmax, z)
+        
+        #Reading remaining parameters
+        self.r_l = r_l
+        self.theta_wind = np.deg2rad(theta_wind)
+        self.cov_wind = cov_wind
+        self.T_wind = T_wind
+        
+        
+        #Getting wind geometry
+        self._calc_aspect()
+        self._calc_windLims()
+        self._calc_totArea()
+        self.BB_wind = self.bb_radiance_ann(self.T_wind) #Spectral shape of wind
+        #Checks
+        self._check_solid()
+        
+        
+        #Creating grids/dealing with binning!
+        self.dw = self.w_max/self.w_points #grid spacing in wind frame
+        self.w_bins = np.linspace(0, self.w_max-self.dw, 
+                                  self.w_points) #wind bins
+        
+        self.phis_wind = np.arange(0, 2*np.pi + self.dphi_w, self.dphi_w)
+        
+        self.wind_mesh, self.phi_w_mesh = np.meshgrid(self.w_bins, self.phis_wind)
+        self.tau_wind = self.delay_wind(self.wind_mesh, self.phi_w_mesh)
+    
+    
+    ##########################################################################
+    #---- Wind Properties
+    ##########################################################################
+    
+    def _calc_aspect(self):
+        """
+        Calculates the aspect ratio (Hmax/Rmax) of the wind as seen from 
+        the black hole
+        """
+        self.aspect = self.cov_wind/np.sqrt(1 - self.cov_wind**2)
+    
+    
+    def _calc_windLims(self):
+        """
+        Calculates max radius and max heigth of wind
+        (in graviational units!)
+        """
+        self.rw_max = (self.r_l * np.tan(self.theta_wind))/(
+            np.tan(self.theta_wind) - self.aspect)
+        
+        self.hw_max = self.rw_max * self.aspect
+        self.w_max = np.sqrt((self.rw_max - self.r_l)**2 + self.hw_max**2) #max length of streamline
+    
+    def _calc_totArea(self):
+        """
+        Calculates the total surface area of the wind conical
+        """
+        
+        if self.theta_wind == np.pi/2: #in this case cylindrical shape!!!
+            self.Aw = 2*np.pi*self.r_l*self.hw_max
+        
+        else:
+            self.Aw = ((np.pi * self.r_l)/np.cos(self.theta_wind))
+            self.Aw *= (self.rw_max - self.r_l)
+            self.Aw += np.pi * self.rw_max * self.w_max
+    
+    
+    def delay_wind(self, w, phi):
+        """
+        Calculates delay surface over wind conical
+
+        Parameters
+        ----------
+        w : float OR array
+            Position on wind streamline (measured from base of wind) - Units: Rg.
+        phi : float OR array
+            Azimuthal coordinate - Units : rad.
+
+        Returns
+        -------
+        tau_w : float OR array.
+            Delay surface over wind - units : days
+
+        """
+        r = self.r_l + w * np.cos(self.theta_wind)
+        h = w * np.sin(self.theta_wind)
+        
+        tau_sec = (self.Rg/c) * (np.sqrt(r**2 + (h - self.hmax)**2) + (
+            self.hmax - h) * self.cosinc - r*np.cos(phi)*np.sin(self.inc))
+        
+        tau = tau_sec/(24 * 3600)
+        return tau
+    
+    
+    ##########################################################################
+    #----Checks and sets
+    ##########################################################################
+    def _check_solid(self):
+        """
+        Checks that the input solid angle can be acheived with the input launch
+        angle
+
+        """
+        diff = np.tan(self.theta_wind) - self.aspect
+        if diff <= 0:
+            raise ValueError('Input solid angle cannot be achieved for given'
+                             'launch angle!!!')
+        else:
+            pass
+            
+    
+    
+    def set_onlyWind(self):
+        """
+        Tells class to ONLY return wind contribution to SED
+        """
+        self.return_disc = False
+        self.return_warm = False
+        self.return_hot = False
+        
+    
+    ##########################################################################
+    #----Wind spectral components
+    ##########################################################################
+    
+    def wind_pt(self, Lx_t, w):
+        """
+        Emission from single point on wind
+
+        Parameters
+        ----------
+        Lx_t : float
+            X-ray luminosity seen at this point at time t.
+        w : float
+            Position along streamline - units : Rg.
+        Returns
+        -------
+        None.
+
+        """
+        
+        Lwtot = (1 - self.A) * Lx_t * self.cov_wind
+        
+        if self.theta_wind == np.pi/2:
+            dA = self.dphi_w * self.r_l * self.dw
+        
+        else:
+            l = w + self.r_l/np.cos(self.theta_wind)
+            
+            dA = 2 * l * np.cos(self.theta_wind) * self.dw
+            dA += np.cos(self.theta_wind) * self.dw**2
+            dA *= 0.5 * self.dphi_w
+        
+        Lpt = Lwtot * (dA/self.Aw) #ratio, so Rg cancels - hence no need here!
+        return Lpt
+
+    
+    def wind_spec_t(self, Lx_t):
+        """
+        Creates thermal spectrum from wind for a given input X-ray luminosity
+        
+        Since we are only considering the simple case where the wind emitts 
+        perfectly thermal radiation, with ONLY variations in Lx NOT T, then
+        we simply calculate total wind luminosity at time t and normalise
+        the thermal spectrum to this luminosity. This is considerably
+        faster than explicitly calculating the spectrum from each grid point
+        and then adding them up!
+
+        Parameters
+        ----------
+        Lx_t : float OR array
+            X-ray luminosity - IF array ensure there is an entry for each mesh
+            point!.
+
+        Returns
+        -------
+        Lnu_t : array
+            Thermal wind spectrum at time t.
+
+        """
+        
+        Ltot = 0
+        for i in range(len(self.w_bins)):
+            
+            if np.ndim(Lx_t) == 0:
+                Lx_w = np.full(len(self.phis_wind), Lx_t)
+            else:
+                Lx_w = Lx_t[:, i] #Collecting all azimuths within wind bin
+            
+            Lip = self.wind_pt(Lx_w, self.w_bins[i])
+            Li = np.sum(Lip)
+            Ltot += Li
+        
+        normC = Ltot/np.trapz(self.BB_wind, self.nu_grid)
+        Lnu_t = normC * self.BB_wind
+        return Lnu_t
+
+
+    
+    ##########################################################################
+    #----Overall SEDs + SED evolution
+    ##########################################################################
+    
+    def mean_spec(self):
+        """
+        Time averaged SED + each component
+        SED components are stored as class atributes
+        
+        Returns
+        -------
+        Lnu_tot : array
+            Total time-averaged SED.
+
+        """
+        #disc component
+        #including condition on r_bin to avoid resolution error
+        #if you absoltely want to see tiny contributions then increase radial resolution
+        if self.return_disc == True and len(self.logr_ad_bins) > 1:
+            Lnu_d = self.disc_spec_t(self.Lx)
+        else:
+            Lnu_d = np.zeros(len(self.nu_grid))
+        
+        #warm component
+        if self.return_warm == True and len(self.logr_wc_bins) > 1:
+            Lnu_w = self.warm_spec_t(self.Lx)
+        else:
+            Lnu_w = np.zeros(len(self.nu_grid))
+        
+        if self.return_hot == True and self.r_h != self.risco:
+            Lnu_h = self.hot_spec()
+        else:
+            Lnu_h = np.zeros(len(self.nu_grid))
+
+        Lnu_wind = self.wind_spec_t(self.Lx)
+        Ltot = Lnu_wind + Lnu_d + Lnu_w + Lnu_h
+        
+        self.Lnu_wind = self._new_units(Lnu_wind)
+        self.Lnu_d = self._new_units(Lnu_d)
+        self.Lnu_w = self._new_units(Lnu_w)
+        self.Lnu_h = self._new_units(Lnu_h)
+        self.Lnu_tot = self._new_units(Ltot)
+        return self.Lnu_tot
+
+
+    def evolve_spec(self, lxs, ts):
+        """
+        Evolves SED according to some input light-curve
+
+        Parameters
+        ----------
+        lxs : TYPE
+            DESCRIPTION.
+        ts : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+        #First checking that beginning of time array is 0!
+        if ts[0] != 0:
+            ts = ts - ts[0]
+        
+        #Now checking that light-curve flux is fractional
+        #if np.mean(lxs) != 1:
+        #    lxs = lxs/np.mean(lxs)
+        
+        #getting mean hot spec - as this just goes up and down...
+        #no time delay for this component...
+        if self.return_hot == True:
+            Lh_mean = self.hot_spec()
+        else:
+            Lh_mean = np.zeros(len(self.nu_grid))
+        
+        #Now evolving light-curves!
+        Lxs = lxs * self.Lx #array of x-ray lums
+        Lin = np.array([self.Lx]) #array of Ls in play
+        
+        Lirr_ad = np.ndarray(np.shape(self.tau_ad))
+        Lirr_wc = np.ndarray(np.shape(self.tau_wc))
+        Lirr_wind = np.ndarray(np.shape(self.tau_wind))
+
+        for j in range(len(ts)):
+
+            Lin = np.append(Lin, [Lxs[j]])
+            if j == 0:
+                t_delay = np.array([np.inf])
+            else:
+                t_delay += ts[j] - ts[j-1] #Adding time step to delay array
+            
+            t_delay = np.append(t_delay, [0]) #Appending 0 for current emitted
+            
+            #Sorting irradiation arrays
+            for k in range(len(t_delay)):
+                Lirr_ad[self.tau_ad <= t_delay[k]] = Lin[k]
+                Lirr_wc[self.tau_wc <= t_delay[k]] = Lin[k]
+                Lirr_wind[self.tau_wind <= t_delay[k]] = Lin[k]
+            
+            #Evolving spectral components
+            if self.return_disc == True and len(self.logr_ad_bins) > 1:
+                Ld_t = self.disc_spec_t(Lirr_ad)
+            else:
+                Ld_t = np.zeros(len(self.nu_grid))
+            
+            if self.return_warm == True and len(self.logr_wc_bins) > 1:
+                Lw_t = self.warm_spec_t(Lirr_wc)
+            else:
+                Lw_t = np.zeros(len(self.nu_grid))
+            
+            
+            Lwind_t = self.wind_spec_t(Lirr_wind)
+       
+            Lh_t = Lh_mean * lxs[j]
+            
+            Ltot_t = Lwind_t + Ld_t + Lw_t + Lh_t
+            
+
+            if j == 0:
+                Lwind_all = Lwind_t
+                Ld_all = Ld_t
+                Lw_all = Lw_t
+                Lh_all = Lh_t
+                Ltot_all = Ltot_t
+        
+            
+            else:
+                Lwind_all = np.column_stack((Lwind_all, Lwind_t))
+                Ld_all = np.column_stack((Ld_all, Ld_t))
+                Lw_all = np.column_stack((Lw_all, Lw_t))
+                Lh_all = np.column_stack((Lh_all, Lh_t))
+                Ltot_all = np.column_stack((Ltot_all, Ltot_t))
+        
+        self.Lwind_t_all = self._new_units(Lwind_all)
+        self.Ld_t_all = self._new_units(Ld_all)
+        self.Lw_t_all = self._new_units(Lw_all)
+        self.Lh_t_all = self._new_units(Lh_all)
+        self.Ltot_t_all = self._new_units(Ltot_all)
+        return self.Ltot_t_all
+
+
+
+    def generate_lightcurve(self, band, band_width, as_frac=True, lxs=None, ts=None):
+        """
+        Generated a light-curve for a band centered on nu, with bandwidth dnu
+        Uses nu_obs/E_obs - as this is in observers frame
+        
+        Currently only does top-hat response/bandpass. Might be updated later.
+        Returnes fluxes integrated over band_width.
+        So units will be:
+            W/m^2         - for SI
+            ergs/s/cm^2   - for cgs
+            counts/s/cm^s - for counts
+        
+        Input MUST be in whatever units you have set units to be!!!
+        i.e if cgs of SI - then Hz,
+            if counts - then keV
+        IF you have NOT set any units - then default is currently SI, and you
+        need to pass band in Hz
+        
+        NOTE: If band_width smaller than bin-width in model grid, then model bin width
+        used instead!
+        Parameters
+        ----------
+        band : float
+            Midpoint in bandpass - units : Hz OR keV.
+        band_width : float
+            Bandwidth - units : Hz or keV.
+        lxs : 1D-array, OPTIONAL
+            X-ray light-curve - only needed if evolved spec NOT already calculated
+        ts : 1D-array, OPTIONAL
+            Light-curve time stamps
+
+        """
+        
+        if hasattr(self, 'Ltot_t_all'):
+            Ltot_all = self.Ltot_t_all
+        else:
+            if lxs == None:
+                raise ValueError('NONE type light-curve not permitted!! \n'
+                                 'Either run evolve_spec() FIRST \n'
+                                 'OR pass a light-curve here!')
+            else:    
+                Ltot_all = self.evolve_spec(lxs, ts)
+        
+        
+        #Mean spec for norm
+        if hasattr(self, 'Lnu_tot'):
+            Lmean = self.Lnu_tot
+        else:
+            Lmean = self.mean_spec()
+        
+        
+        if self.units == 'SI' or self.units == 'cgs':
+            idx_mod_up = np.abs(band + band_width/2 - self.nu_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.nu_obs).argmin()
+            
+            if idx_mod_up == idx_mod_low:
+                Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                Lb_mean = Lmean[idx_mod_up] * band_width
+                
+            else:
+                Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
+                Lcurve = np.trapz(Lc_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
+                Lb_mean = np.trapz(Lmean_band, self.nu_grid[idx_mod_low:idx_mod_up+1])
+            
+        elif self.units == 'counts':
+            idx_mod_up = np.abs(band + band_width/2 - self.E_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.E_obs).argmin()
+            
+            if idx_mod_up == idx_mod_low:
+                Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                Lb_mean = Lmean[idx_mod_up] * band_width
+            
+            else:
+                Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
+                Lcurve = np.trapz(Lc_band, self.E_obs[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
+                Lb_mean = np.trapz(Lmean_band, self.E_obs[idx_mod_low:idx_mod_up+1])
+        
+        
+        #print(Ltot_all[:, 0]/Lmean)
+        
+        if as_frac == True:
+            Lc_out = Lcurve/Lb_mean
+        else:
+            Lc_out = Lcurve
+        
+        return Lc_out
+
 
 
 
@@ -1745,109 +2282,86 @@ class AGNhot_var(AGNsed_var):
 #---- Testing 
 ##############################################################################
 if __name__ == '__main__': 
-
-    
-    
     import matplotlib.pyplot as plt
-    
+
     M = 2e8
     dist = 200
-    lmdot = -1.298
+    log_mdot = -1.298
     astar = 0
-    cosi = 0.3
+    cosi = 0.9
     kTe_h = 100
-    kTe_w = 0.2
-    gamma_h = 2.03
-    gamma_w = 2.593
-    r_h = 26.7
-    r_w = 400
-    log_rout = -1
+    kTe_w = 0.239
+    gamma_h = 1.97
+    gamma_w = 2.612
+    r_h = 25.69
+    r_w = 377
+    log_rout = 3
     hmax = 10
+    r_l = 200
+    theta_wind = 90
+    cov_wind = 0.3
+    T_wind = 1e4
     z = 0
     
-    np.random.seed(123)
-    #myagn = AGNsed_var(M, dist, lmdot, astar, cosi, kTe_h, kTe_w, gamma_h, gamma_w,
-    #            r_h, r_w, log_rout, hmax, z)
+    wvar = AGNbiconTH_var(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, 
+                          gamma_h, gamma_w, r_h, r_w, log_rout, hmax, r_l, 
+                          theta_wind, cov_wind, T_wind, z)
     
-    myagn = AGNdark_var(M, dist, lmdot, astar, cosi, kTe_h, gamma_h, r_h, 
-                        log_rout, hmax, z)
     
-    print(myagn.risco)
-    myagn.set_cgs()
-    myagn.set_flux()
-    ts_test = np.arange(0, 100, 1)
-    lfracs = np.random.rand(len(ts_test)) + 0.5
+    avar = AGNsed_var(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h, 
+                      gamma_w, r_h, r_w, log_rout, hmax, z)
     
-    datdir = '/home/wljw75/Documents/phd/Fairall9_lightCurveCampaign/lightcurves/fourierAnalysis/F9_FourierReduced_Normalised_Interpolated_and_ReBinned_V1/'
+    #wvar.set_onlyWind()
     
-    ts, fx = np.loadtxt(datdir + 'HX.dat', usecols=(0, 1), unpack=True)
-    ts2, fu = np.loadtxt(datdir + 'W2.dat', usecols=(0, 1), unpack=True)
+    #---- Testing spec
+    wvar.set_counts()
+    wvar.set_flux()
+    
+    Ltot = wvar.mean_spec()
+    Lwind = wvar.Lnu_wind
+    Ld = wvar.Lnu_d
+    Lw = wvar.Lnu_w
+    Lh = wvar.Lnu_h
+    
+    Es = wvar.E_obs
+    
+    
+    plt.loglog(Es, Es**2 * Lwind, color='magenta', ls='-.')
+    plt.loglog(Es, Es**2 * Ld, color='red', ls='-.')
+    plt.loglog(Es, Es**2 * Lw, color='green', ls='-.')
+    plt.loglog(Es, Es**2 * Lh, color='blue', ls='-.')
+    
+    plt.loglog(Es, Es**2 * Ltot, color='k')
+    
+    plt.ylim(1e-3, 9e-2)
+    plt.xlim(7e-4, 3e2)
+    plt.show()
+    
+    
+    #----Testing Lcurve
+    ts_in = np.linspace(0, 50, 100)
+    fs_in = np.sin(ts_in)/2 + 1
+    fs_in /= np.mean(fs_in)
+    #fs_in = np.ones(len(ts_in))
+    
+    Lnuall = wvar.evolve_spec(fs_in, ts_in)
+    fs_out = wvar.generate_lightcurve(3e-3, 8e-3)
+    
+    plt.plot(ts_in, fs_in)
+    plt.plot(ts_in, fs_out)
+    plt.show()
+    
+ 
+    #Comparing to AGNsed
+    avar.set_counts()
+    avar.set_flux()
+    
+    Lavar = avar.evolve_spec(fs_in, ts_in)
+    fs_avar = avar.generate_lightcurve(3e-3, 4e-3)    
 
-    #myagn.return_disc = False
-    #myagn.return_hot = False
-    Lev = myagn.evolve_spec(fx, ts)
-    
-    nus = myagn.nu_grid
-    nu_u2 = (1928 * u.AA).to(u.Hz, equivalencies=u.spectral()).value
-    idx15 = np.abs(nu_u2 - nus).argmin()
-    
-    lcurve_phy = myagn.generate_lightcurve(nu_u2, 0.1 * nu_u2)
-    lcurve = lcurve_phy/np.mean(lcurve_phy)
-    
-    #plt.plot(ts_test, lfracs)
-    plt.plot(ts, fx)
+    plt.plot(ts_in, fs_out/np.mean(fs_out), color='C1')
+    plt.plot(ts_in, fs_avar/np.mean(fs_avar), color='C2')
     plt.show()
+
     
-    plt.plot(ts2, fu)
-    plt.plot(ts, lcurve)
-    plt.show()
-    """
     
-    #Testing spectrum
-    Lnu_tot = myagn.mean_spec()
-    Lnu_d = myagn.Lnu_d
-    Lnu_w = myagn.Lnu_w
-    Lnu_h = myagn.Lnu_h
-    
-    plt.loglog(nus, nus*Lnu_d, color='red', ls='-.')
-    plt.loglog(nus, nus*Lnu_w, color='green', ls='-.')
-    plt.loglog(nus, nus*Lnu_h, color='blue', ls='-.')
-    plt.loglog(nus, nus*Lnu_tot, color='k')
-    
-    plt.axvspan(nu_u2 - (0.1*nu_u2)/2, nu_u2 + (0.1*nu_u2)/2, color='red', alpha=0.5)
-    plt.ylim(1e-12, 1e-10)
-    plt.xlim(1e14, 1e20)
-    plt.show()
-    
-    #Testing response
-    
-    myagn.return_disc = False
-    myagn.return_hot = False
-    resp = myagn.response_components(nu_u2, 0.1*nu_u2)
-    t_resp = myagn.t_imp
-    
-    plt.plot(t_resp, resp)
-    plt.show()
-    
-    #testing radial response
-    r_bins = myagn.logr_wc_bins
-    drs = 10**r_bins[1:] - 10**r_bins[:-1]
-    rmid = 10**r_bins[:-1] + drs/2
-    
-    print(rmid[20], drs[20])
-    
-    for n in range(len(rmid)):
-        Tr, tau = myagn.radial_transfer(rmid[n], drs[n])
-        
-        if n == 0:
-            Ttot_all = Tr 
-        else:
-            Ttot_all = np.column_stack((Ttot_all, Tr))
-        
-        plt.plot(tau, Tr)
-    
-    Ttot = np.trapz(Ttot_all, rmid, axis=-1)
-    
-    plt.plot(tau, Ttot, color='k')
-    plt.show()
-    """
