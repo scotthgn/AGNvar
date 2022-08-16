@@ -1419,7 +1419,7 @@ class AGNbiconTH_var(AGNsed_var):
         domega = self.dcos_th * self.dphi_w
         Lpt = Lx_t * (1-self.windAlbedo) * domega/(4*np.pi)
             
-        return Lpt, np.full(len(Lx_t), (domega/(4*np.pi)))
+        return Lpt
 
     
     def wind_spec_t(self, Lx_t):
@@ -1447,7 +1447,6 @@ class AGNbiconTH_var(AGNsed_var):
         """
         
         Ltot = 0
-        Omtot = 0
         for i in range(len(self.cos_thbins) - 1):
             
             if np.ndim(Lx_t) == 0:
@@ -1455,17 +1454,13 @@ class AGNbiconTH_var(AGNsed_var):
             else:
                 Lx_w = Lx_t[:, i] #Collecting all azimuths within wind bin
             
-            Lip, omip = self.wind_pt(Lx_w)
+            Lip = self.wind_pt(Lx_w)
             Li = np.sum(Lip)
-            oi = np.sum(omip)
             Ltot += Li
-            Omtot += oi
-        
+
         normC = Ltot/np.trapz(self.BB_wind, self.nu_grid)
         Lnu_t = normC * self.BB_wind
         
-        print(Ltot*2, Lx_t*(1-self.windAlbedo)*self.cov_wind)
-        print(Omtot, self.cov_wind/2)
         return Lnu_t
 
 
@@ -3066,7 +3061,7 @@ if __name__ == '__main__':
     log_rout = 2.30026
     hmax = 10
     r_l = 400
-    theta_wind = 60
+    theta_wind = 65
     cov_wind = 0.809717
     windAlbedo = 0.5
     T_wind = 1e4
