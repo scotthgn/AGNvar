@@ -21,6 +21,7 @@ from scipy.integrate import quad
 from pyNTHCOMP import donthcomp
 
 import warnings
+from tqdm import tqdm
 
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
@@ -1169,6 +1170,7 @@ class AGNsed_var(AGN):
 
 
 
+
 class AGNbiconTH_var(AGNsed_var):
     """
     This model follows AGNVAR, however with the addition of a thermal
@@ -1193,7 +1195,7 @@ class AGNbiconTH_var(AGNsed_var):
     """
     
     return_wind = True
-    w_points = 100 #Nr of grid points along wind streamline - Currently linear spacing
+    dcos_th = 0.001 #Spacing in cos theta (measured from z-axis) - for solid angle calcs
     dphi_w = 0.001 #phi grid for wind - Needs to be better sampled than disc in order to converge!
     
     def __init__(self, 
@@ -1214,6 +1216,7 @@ class AGNbiconTH_var(AGNsed_var):
                  theta_wind,
                  cov_wind,
                  T_wind,
+                 windAlbedo,
                  z):
         
         """
@@ -1274,6 +1277,7 @@ class AGNbiconTH_var(AGNsed_var):
         self.theta_wind = np.deg2rad(theta_wind)
         self.cov_wind = cov_wind
         self.T_wind = T_wind
+        self.windAlbedo = windAlbedo
         
         
         #Getting wind geometry
@@ -1286,15 +1290,17 @@ class AGNbiconTH_var(AGNsed_var):
         
         
         #Creating grids/dealing with binning!
-        self.dw = self.w_max/self.w_points #grid spacing in wind frame
-        self.w_bins = np.linspace(0, self.w_max-self.dw, 
-                                  self.w_points) #wind bins
+        lmax = np.sqrt(self.rw_max**2 + self.hw_max**2)
+        cos_thmax = self.hw_max/lmax
+        self.cos_thbins = np.arange(0, cos_thmax+self.dcos_th, self.dcos_th)
         
         self.phis_wind = np.arange(0, 2*np.pi + self.dphi_w, self.dphi_w)
         
-        self.wind_mesh, self.phi_w_mesh = np.meshgrid(self.w_bins, self.phis_wind)
-        self.tau_wind = self.delay_wind(self.wind_mesh, self.phi_w_mesh)
-    
+        self.costh_mesh, self.phi_w_mesh = np.meshgrid(self.cos_thbins, self.phis_wind)
+        self.tau_wind = self.delay_wind(self.costh_mesh, self.phi_w_mesh)
+        
+        
+        
     
     ##########################################################################
     #---- Wind Properties
@@ -1318,7 +1324,7 @@ class AGNbiconTH_var(AGNsed_var):
         
         self.hw_max = self.rw_max * self.aspect
         self.w_max = np.sqrt((self.rw_max - self.r_l)**2 + self.hw_max**2) #max length of streamline
-    
+        
     def _calc_totArea(self):
         """
         Calculates the total surface area of the wind conical
@@ -1333,14 +1339,15 @@ class AGNbiconTH_var(AGNsed_var):
             self.Aw += np.pi * self.rw_max * self.w_max
     
     
-    def delay_wind(self, w, phi):
+    
+    def delay_wind(self, costh, phi):
         """
         Calculates delay surface over wind conical
 
         Parameters
         ----------
         w : float OR array
-            Position on wind streamline (measured from base of wind) - Units: Rg.
+            Position on wind streamline (measured from z-axis) - Units: rad.
         phi : float OR array
             Azimuthal coordinate - Units : rad.
 
@@ -1350,8 +1357,9 @@ class AGNbiconTH_var(AGNsed_var):
             Delay surface over wind - units : days
 
         """
-        r = self.r_l + w * np.cos(self.theta_wind)
-        h = w * np.sin(self.theta_wind)
+        th = np.arccos(costh)
+        r = self.r_l/(1 - (np.tan((np.pi/2) - th)/np.tan(self.theta_wind)))
+        h = r * np.tan((np.pi/2) - th)
         
         tau_sec = (self.Rg/c) * (np.sqrt(r**2 + (h - self.hmax)**2) + (
             self.hmax - h) * self.cosinc - r*np.cos(phi)*np.sin(self.inc))
@@ -1391,7 +1399,7 @@ class AGNbiconTH_var(AGNsed_var):
     #----Wind spectral components
     ##########################################################################
     
-    def wind_pt(self, Lx_t, w):
+    def wind_pt(self, Lx_t):
         """
         Emission from single point on wind
 
@@ -1407,20 +1415,11 @@ class AGNbiconTH_var(AGNsed_var):
 
         """
         
-        Lwtot = (1 - self.A) * Lx_t * self.cov_wind
         
-        if self.theta_wind == np.pi/2:
-            dA = self.dphi_w * self.r_l * self.dw
-        
-        else:
-            l = w + self.r_l/np.cos(self.theta_wind)
+        domega = self.dcos_th * self.dphi_w
+        Lpt = Lx_t * (1-self.windAlbedo) * domega/(4*np.pi)
             
-            dA = 2 * l * np.cos(self.theta_wind) * self.dw
-            dA += np.cos(self.theta_wind) * self.dw**2
-            dA *= 0.5 * self.dphi_w
-        
-        Lpt = Lwtot * (dA/self.Aw) #ratio, so Rg cancels - hence no need here!
-        return Lpt
+        return Lpt, np.full(len(Lx_t), (domega/(4*np.pi)))
 
     
     def wind_spec_t(self, Lx_t):
@@ -1448,19 +1447,25 @@ class AGNbiconTH_var(AGNsed_var):
         """
         
         Ltot = 0
-        for i in range(len(self.w_bins)):
+        Omtot = 0
+        for i in range(len(self.cos_thbins) - 1):
             
             if np.ndim(Lx_t) == 0:
                 Lx_w = np.full(len(self.phis_wind), Lx_t)
             else:
                 Lx_w = Lx_t[:, i] #Collecting all azimuths within wind bin
             
-            Lip = self.wind_pt(Lx_w, self.w_bins[i])
+            Lip, omip = self.wind_pt(Lx_w)
             Li = np.sum(Lip)
+            oi = np.sum(omip)
             Ltot += Li
+            Omtot += oi
         
         normC = Ltot/np.trapz(self.BB_wind, self.nu_grid)
         Lnu_t = normC * self.BB_wind
+        
+        print(Ltot*2, Lx_t*(1-self.windAlbedo)*self.cov_wind)
+        print(Omtot, self.cov_wind/2)
         return Lnu_t
 
 
@@ -1701,6 +1706,769 @@ class AGNbiconTH_var(AGNsed_var):
 
 
 
+class AGNbiconTable_var(AGNsed_var):
+    """
+    Same geometry and principle as AGNbiconTH_var - however instead of considering
+    a simple black-body shape from the wind, this reads a CLOUDY output file.
+    
+    Similarily to AGNbiconTH_var, we assume the variations in the wind/outflow
+    emission are driven by variations in the X-ray emission. For computational
+    reasons, this takes three pre-calculated cloudy SEDs, using Lx_mean, Lx_max,
+    and Lx_min. It then calculates the response at each Lx by interpolating
+    between the SEDs.
+        
+    The cloudy SEDs should follow the naming convention fname_max.con, 
+    fname_mean.con, and fname_min.con - where fname is given as an argument 
+    when initiating the class. They also need to be in the same directory
+    
+    A future version of the code will do this properly, using a library/grid of 
+    CLOUDY tables, to see the response explicitly. However, for now this is just
+    testing the concept.
+    
+    Note!!! Before running this model you will need to constrian your intrinsic
+    SED, and then feed that through cloudy to get the shape of your diffuse and
+    reflected emission. Since this can take a while we leave this as an external
+    thing for the user to do.
+    
+    Note2!!! The Cloudy table needs to be in cgs units, and nuLnu.
+    So Hz and erg/s
+    """
+    
+    w_points = 100 #Nr of grid points along wind streamline - Currently linear spacing
+    dphi_w = 0.001 #phi grid for wind - Needs to be better sampled than disc in order to converge!
+    
+    return_diff = True
+    return_ref = True
+    
+    def __init__(self, 
+                 M,
+                 dist,
+                 log_mdot,
+                 astar,
+                 cosi,
+                 kTe_h,
+                 kTe_w,
+                 gamma_h,
+                 gamma_w,
+                 r_h,
+                 r_w,
+                 log_rout,
+                 hmax,
+                 r_l,
+                 theta_wind,
+                 cov_wind,
+                 windAlbedo,
+                 z,
+                 fname,
+                 fpath=None,
+                 fLx_min=0.5,
+                 fLx_max=1.5):
+        
+        """
+        Initiates the AGNbiconTH object - defines geometry
+
+        Parameters
+        ----------
+        M : float
+            BH mass - units : Msol.
+        dist : float
+            Co-Moving distance - units : Mpc
+        log_mdot : float
+            log of mass accretion rate - units : L/Ledd
+        astar : float
+            Dimensionless spin parameter
+        cosi : float
+            cosine of inclination
+        kTe_h : float
+            Electron temperature for hot corona (high energy rollover)
+            Units : keV
+        kTe_w : float
+            Electron temperature for warm corona (high energy rollover)
+            Units : keV
+        gamma_h : float
+            Hot Compton photon index
+        gamma_w : float
+            Warm Compton photon index
+        r_h : float
+            Outer edge of hot corona (or inner edge of warm..)
+            If -ve uses risco
+            Units : Rg
+        r_w : float 
+            Outer edge of warm corona (or inner edge of standard disc)
+            If -ve uses risco
+            Units : Rg
+        log_rout : float
+            Outer edge of disc - units : Rg
+            If -ve uses r_sg
+        hmax : float
+            Max height of hot corona - units : Rg
+        r_l : float
+            Wind/outflow launch radius - units : Rg
+        theta_wind : float
+            Wind/outlfow bi-con angle, w.r.t the disc - units : deg
+        cov_wind : float
+            Wind covering fraction - units : dOmega/4pi
+        z : float
+            Redshift
+        fname : str
+            File name for CLOUDY SED table. Note, should be in the default
+            format produced by CLOUDY through the command: save continuum
+        fpath : str, OTIONAL
+            If SED table NOT in your current directory, then you can set the
+            path
+        fLx_min : float
+            Minimum fraction of mean X-ray luminosity
+        fLx_max : float
+            Maximum fraction of mean X-ray luminosity
+        """
+        
+        super().__init__(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h,
+                       gamma_w, r_h, r_w, log_rout, hmax, z)
+        
+        #Reading remaining parameters
+        self.r_l = r_l
+        self.theta_wind = np.deg2rad(theta_wind)
+        self.cov_wind = cov_wind
+        self.windAlbedo = windAlbedo
+        self.fname = fname
+        self.fpath = fpath
+        self.fLx_min = fLx_min
+        self.fLx_max = fLx_max
+        
+        #Getting wind geometry
+        self._calc_aspect()
+        self._calc_windLims()
+        self._calc_totArea()
+
+        #Checks
+        self._check_solid()
+        
+        #Loading CLOUDY SED
+        self._loadSED()
+        
+        #Creating grids/dealing with binning!
+        self.dw = self.w_max/self.w_points #grid spacing in wind frame
+        self.w_bins = np.linspace(0, self.w_max-self.dw, 
+                                  self.w_points) #wind bins
+        
+        self.phis_wind = np.arange(0, 2*np.pi + self.dphi_w, self.dphi_w)
+        
+        self.wind_mesh, self.phi_w_mesh = np.meshgrid(self.w_bins, self.phis_wind)
+        self.tau_wind = self.delay_wind(self.wind_mesh, self.phi_w_mesh)
+        
+        
+        
+    ##########################################################################
+    #---- Wind Properties
+    ##########################################################################
+    
+    def _calc_aspect(self):
+        """
+        Calculates the aspect ratio (Hmax/Rmax) of the wind as seen from 
+        the black hole
+        """
+        self.aspect = self.cov_wind/np.sqrt(1 - self.cov_wind**2)
+    
+    
+    def _calc_windLims(self):
+        """
+        Calculates max radius and max heigth of wind
+        (in graviational units!)
+        """
+        self.rw_max = (self.r_l * np.tan(self.theta_wind))/(
+            np.tan(self.theta_wind) - self.aspect)
+        
+        self.hw_max = self.rw_max * self.aspect
+        self.w_max = np.sqrt((self.rw_max - self.r_l)**2 + self.hw_max**2) #max length of streamline
+    
+    def _calc_totArea(self):
+        """
+        Calculates the total surface area of the wind conical
+        """
+        
+        if self.theta_wind == np.pi/2: #in this case cylindrical shape!!!
+            self.Aw = 2*np.pi*self.r_l*self.hw_max
+        
+        else:
+            self.Aw = ((np.pi * self.r_l)/np.cos(self.theta_wind))
+            self.Aw *= (self.rw_max - self.r_l)
+            self.Aw += np.pi * self.rw_max * self.w_max
+    
+    
+    def delay_wind(self, w, phi):
+        """
+        Calculates delay surface over wind conical
+
+        Parameters
+        ----------
+        w : float OR array
+            Position on wind streamline (measured from base of wind) - Units: Rg.
+        phi : float OR array
+            Azimuthal coordinate - Units : rad.
+
+        Returns
+        -------
+        tau_w : float OR array.
+            Delay surface over wind - units : days
+
+        """
+        r = self.r_l + w * np.cos(self.theta_wind)
+        h = w * np.sin(self.theta_wind)
+        
+        tau_sec = (self.Rg/c) * (np.sqrt(r**2 + (h - self.hmax)**2) + (
+            self.hmax - h) * self.cosinc - r*np.cos(phi)*np.sin(self.inc))
+        
+        tau = tau_sec/(24 * 3600)
+        return tau
+    
+    
+    
+    ##########################################################################
+    #----Checks and sets
+    ##########################################################################
+    def _check_solid(self):
+        """
+        Checks that the input solid angle can be acheived with the input launch
+        angle
+
+        """
+        diff = np.tan(self.theta_wind) - self.aspect
+        if diff <= 0:
+            raise ValueError('Input solid angle cannot be achieved for given'
+                             'launch angle!!!')
+        else:
+            pass
+            
+    
+    
+    def set_onlyWind(self):
+        """
+        Tells class to ONLY return wind contribution to SED
+        """
+        self.return_disc = False
+        self.return_warm = False
+        self.return_hot = False
+    
+
+
+    ##########################################################################
+    #---- Loading table file
+    ##########################################################################
+    def _loadSED(self):
+        """
+        Loads SED files and extracts reflected and diffuse spec
+
+        """
+        if self.fpath == None:
+            nu_cl_mean, nuLdiff_mean, nuLref_mean = np.loadtxt(
+                self.fname + '_meanLx.con', usecols=(0, 3, 5), unpack=True)
+            nu_cl_max, nuLdiff_max, nuLref_max = np.loadtxt(
+                self.fname + '_maxLx.con', usecols=(0, 3, 5), unpack=True)
+            nu_cl_min, nuLdiff_min, nuLref_min = np.loadtxt(
+                self.fname + '_minLx.con', usecols=(0, 3, 5), unpack=True)
+        
+        else:
+            nu_cl_mean, nuLdiff_mean, nuLref_mean = np.loadtxt(
+                self.fpath + self.fname + '_meanLx.con', usecols=(0, 3, 5), unpack=True)
+            nu_cl_max, nuLdiff_max, nuLref_max = np.loadtxt(
+                self.fpath + self.fname + '_maxLx.con', usecols=(0, 3, 5), unpack=True)
+            nu_cl_min, nuLdiff_min, nuLref_min = np.loadtxt(
+                self.fpath + self.fname + '_minLx.con', usecols=(0, 3, 5), unpack=True)
+        
+        Ldiff_cl_mean = 1e-7 * nuLdiff_mean/nu_cl_mean #In W
+        Lref_cl_mean = 1e-7 * nuLref_mean/nu_cl_mean
+        
+        Ldiff_cl_max = 1e-7 * nuLdiff_max/nu_cl_max #In W
+        Lref_cl_max = 1e-7 * nuLref_max/nu_cl_max
+        
+        Ldiff_cl_min = 1e-7 * nuLdiff_min/nu_cl_min #In W
+        Lref_cl_min = 1e-7 * nuLref_min/nu_cl_min
+
+        self.Ldiff_mean = self._reCastSED(nu_cl_mean, Ldiff_cl_mean)
+        self.Lref_mean = self._reCastSED(nu_cl_mean, Lref_cl_mean)
+        
+        self.Ldiff_max = self._reCastSED(nu_cl_max, Ldiff_cl_max)
+        self.Lref_max = self._reCastSED(nu_cl_max, Lref_cl_max)
+        
+        self.Ldiff_min = self._reCastSED(nu_cl_min, Ldiff_cl_min)
+        self.Lref_min = self._reCastSED(nu_cl_min, Lref_cl_min)
+
+    
+    
+    def _reCastSED(self, nu, Lnu):
+        """
+        Re-casts CLOUDY SED onto same grid as rest of model
+
+        Parameters
+        ----------
+        nu : array
+            CLOUDY frequency grid - units : Hz.
+        Lnu : array
+            CLOUDY luminosities.
+
+        """
+        Lnew = np.array([])
+        for nu_i in self.nu_grid:
+            idx_1 = np.abs(nu_i - nu).argmin()
+    
+    
+            if nu_i - nu[idx_1] > 0:
+                if nu[idx_1] != nu[-1]: #ensuring we dont fall off array
+                    nu1 = nu[idx_1]
+                    nu2 = nu[idx_1 + 1]
+                    L1 = Lnu[idx_1]
+                    L2 = Lnu[idx_1 + 1]
+                
+                else:
+                    nu1 = nu[idx_1 - 1]
+                    nu2 = nu[idx_1]
+                    L1 = Lnu[idx_1 -1]
+                    L2 = Lnu[idx_1]
+        
+                dL_dnu = (L2 - L1)/(nu2 - nu1)
+                Li = dL_dnu * (nu_i - nu1) + L1
+    
+            elif nu_i - nu[idx_1] < 0:
+                if nu[idx_1] != nu[0]:
+                    nu1 = nu[idx_1 - 1]
+                    nu2 = nu[idx_1]
+                    L1 = Lnu[idx_1 -1]
+                    L2 = Lnu[idx_1]
+                    
+                else:
+                    nu1 = nu[idx_1]
+                    nu2 = nu[idx_1 + 1]
+                    L1 = Lnu[idx_1]
+                    L2 = Lnu[idx_1 + 1]
+                    
+                dL_dnu = (L2 - L1)/(nu2 - nu1)
+                Li = dL_dnu * (nu_i - nu1) + L1
+    
+            else:
+                Li = Lnu[idx_1]
+        
+            Lnew = np.append(Lnew, [Li])
+        return Lnew
+    
+    
+    
+    def _interpSED(self, fLxt):
+        """
+        Interpolates between the cloudy SEDs for some given Lx
+
+        Parameters
+        ----------
+        Lxt : float
+            X-ray luminosity - units : F/Fmean.
+
+        Returns
+        -------
+        Ldiff_t : array
+            Interpolated diffuse spec
+        Lref_t : array
+            Interpolated reflected spec
+
+        """
+        Lfrac = fLxt#/self.Lx
+        
+        if Lfrac == self.fLx_min:
+            Ldiff_t = self.Ldiff_min
+            Lref_t = self.Lref_min
+            
+        elif Lfrac == 1.:
+            Ldiff_t = self.Ldiff_mean
+            Lref_t = self.Lref_mean
+            
+        elif Lfrac == self.fLx_max:
+            Ldiff_t = self.Ldiff_max
+            Lref_t = self.Lref_max
+            
+        else:
+            if Lfrac > 1.:
+                dDiff_dL = (self.Ldiff_max - self.Ldiff_mean)/(self.fLx_max - 1)
+                Ldiff_t = self.Ldiff_mean + dDiff_dL * (Lfrac - 1)
+                
+                dRef_dL = (self.Lref_max - self.Lref_mean)/(self.fLx_max - 1)
+                Lref_t = self.Lref_mean + dRef_dL * (Lfrac - 1)
+            
+            else:
+                dDiff_dL = (self.Ldiff_mean - self.Ldiff_min)/(1 - self.fLx_min)
+                Ldiff_t = self.Ldiff_min + dDiff_dL * (Lfrac - self.fLx_min)
+                
+                dRef_dL = (self.Lref_mean - self.Lref_min)/(1 - self.fLx_min)
+                Lref_t = self.Lref_min + dRef_dL * (Lfrac - self.fLx_min)
+                
+        return Ldiff_t, Lref_t
+    
+    
+    def _makeWind_dict(self, fLxs):
+        """
+        Generates a dictionary of wind spectra, based off the input fractional
+        X-ray light-curve.
+        This way we only need to interpolate and calculate the spectra one
+        per value of fLx. Might hopefully speed thing up a bit...
+
+        Parameters
+        ----------
+        fLxs : array
+            X-ray light curve - units F/Fmean.
+
+        Returns
+        -------
+        None.
+
+        """
+        self.diff_dict = {}
+        self.ref_dict = {}
+        ufLxs = np.unique(fLxs) #removing duplicates
+        for i in ufLxs:
+            Ldiff_f, Lref_f = self._interpSED(i)
+            self.diff_dict[str(i)] = Ldiff_f
+            self.ref_dict[str(i)] = Lref_f
+        
+        self.diff_dict[str(1.)] = self.Ldiff_mean
+        self.ref_dict[str(1.)] = self.Lref_mean
+        
+        
+
+    ###########################################################################
+    #---- Dealing with wind spec
+    ##########################################################################
+    
+    def wind_dA(self, w):
+        """
+        Calculates surface area of emitting point on wind
+
+        Parameters
+        ----------
+        w : float
+            Position along streamline - units : Rg.
+        Returns
+        -------
+        None.
+
+        """
+    
+        if self.theta_wind == np.pi/2:
+            dA = self.dphi_w * self.r_l * self.dw
+        
+        else:
+            l = w + self.r_l/np.cos(self.theta_wind)
+            
+            dA = 2 * l * np.cos(self.theta_wind) * self.dw
+            dA += np.cos(self.theta_wind) * self.dw**2
+            dA *= 0.5 * self.dphi_w
+        
+        return dA
+    
+    
+    def wind_spec_t(self, fLx_t):
+        """
+        Creates the spectrum from wind for a given input X-ray luminosity
+        
+        Since we are only considering the simple case where the wind emisivitty
+        is constant accross the surface, with ONLY variations in Lx, then
+        we simply calculate total wind luminosity at time t and normalise
+        the CLOUDY spectrum to this luminosity. This is considerably
+        faster than explicitly calculating the spectrum from each grid point
+        and then adding them up!
+        Treats diffuse and reflected emission seperatly
+
+        Parameters
+        ----------
+        Lx_t : float OR array
+            X-ray luminosity - IF array ensure there is an entry for each mesh
+            point!.
+            Units : F/Fmean
+
+        Returns
+        -------
+        Lnu_t_diff : array
+            Diffuse wind spectrum at time t.
+        Lnu_t_ref : array
+            Reflected wind spectrum at time t
+
+        """
+        
+        if np.ndim(fLx_t) == 0:
+            Lnu_t_diff, Lnu_t_ref = self._interpSED(fLx_t)
+        
+        else:
+            Lnu_t_diff = np.zeros(len(self.nu_grid))
+            Lnu_t_ref = np.zeros(len(self.nu_grid))
+            for i in range(len(self.w_bins)):
+                dAw = self.wind_dA(self.w_bins[i])
+                for j in range(len(self.phis_wind)):
+                    fLx_ij = fLx_t[j, i]
+                    Ldiff_ij = self.diff_dict[str(fLx_ij)]
+                    Lref_ij = self.ref_dict[str(fLx_ij)]
+                    
+                    Lnu_t_diff = Lnu_t_diff + Ldiff_ij * (dAw/self.Aw)
+                    Lnu_t_ref = Lnu_t_ref + Lref_ij * (dAw/self.Aw)
+            
+        return Lnu_t_diff, Lnu_t_ref
+    
+
+
+    ##########################################################################
+    #---- Overall SED + evolution
+    ##########################################################################
+    
+    def mean_spec(self):    
+        """
+        Time averaged SED + each component
+        SED components are stored as class atributes
+        
+        Returns
+        -------
+        Lnu_tot : array
+            Total time-averaged SED.
+
+        """
+        #disc component
+        #including condition on r_bin to avoid resolution error
+        #if you absoltely want to see tiny contributions then increase radial resolution
+        if self.return_disc == True and len(self.logr_ad_bins) > 1:
+            Lnu_d = self.disc_spec_t(self.Lx)
+        else:
+            Lnu_d = np.zeros(len(self.nu_grid))
+        
+        #warm component
+        if self.return_warm == True and len(self.logr_wc_bins) > 1:
+            Lnu_w = self.warm_spec_t(self.Lx)
+        else:
+            Lnu_w = np.zeros(len(self.nu_grid))
+        
+        if self.return_hot == True and self.r_h != self.risco:
+            Lnu_h = self.hot_spec()
+        else:
+            Lnu_h = np.zeros(len(self.nu_grid))
+
+        Lnu_diff, Lnu_ref = self.wind_spec_t(1)
+        
+        if self.return_ref != True:
+            Lnu_ref = np.zeros(len(self.nu_grid))
+        
+        if self.return_diff != True:
+            Lnu_diff = np.zeros(len(self.nu_grid))
+        
+        Ltot = Lnu_diff + Lnu_ref + Lnu_d + Lnu_w * (1-self.cov_wind) + Lnu_h
+        
+        self.Lnu_diff = self._new_units(Lnu_diff)
+        self.Lnu_ref = self._new_units(Lnu_ref)
+        self.Lnu_d = self._new_units(Lnu_d)
+        self.Lnu_w = self._new_units(Lnu_w)
+        self.Lnu_h = self._new_units(Lnu_h)
+        self.Lnu_tot = self._new_units(Ltot)
+        return self.Lnu_tot
+    
+    
+    
+    def evolve_spec(self, lxs, ts):
+        """
+        Evolves SED according to some input light-curve
+
+        Parameters
+        ----------
+        lxs : TYPE
+            DESCRIPTION.
+        ts : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+        #First checking that beginning of time array is 0!
+        if ts[0] != 0:
+            ts = ts - ts[0]
+        
+        #Now checking that light-curve flux is fractional
+        #if np.mean(lxs) != 1:
+        #    lxs = lxs/np.mean(lxs)
+        
+        #getting mean hot spec - as this just goes up and down...
+        #no time delay for this component...
+        if self.return_hot == True:
+            Lh_mean = self.hot_spec()
+        else:
+            Lh_mean = np.zeros(len(self.nu_grid))
+        
+        #Now evolving light-curves!
+        Lxs = lxs * self.Lx #array of x-ray lums
+        Lin = np.array([self.Lx]) #array of Ls in play
+        fLin = np.array([1])
+        
+        self._makeWind_dict(lxs)
+        
+        Lirr_ad = np.ndarray(np.shape(self.tau_ad))
+        Lirr_wc = np.ndarray(np.shape(self.tau_wc))
+        Lirr_wind = np.ndarray(np.shape(self.tau_wind))
+
+        for j in tqdm(range(len(ts))):
+
+            Lin = np.append(Lin, [Lxs[j]])
+            fLin = np.append(fLin, [lxs[j]])
+            if j == 0:
+                t_delay = np.array([np.inf])
+            else:
+                t_delay += ts[j] - ts[j-1] #Adding time step to delay array
+            
+            t_delay = np.append(t_delay, [0]) #Appending 0 for current emitted
+            
+            #Sorting irradiation arrays
+            for k in range(len(t_delay)):
+                Lirr_ad[self.tau_ad <= t_delay[k]] = Lin[k]
+                Lirr_wc[self.tau_wc <= t_delay[k]] = Lin[k]
+                Lirr_wind[self.tau_wind <= t_delay[k]] = fLin[k]
+            
+            #Evolving spectral components
+            if self.return_disc == True and len(self.logr_ad_bins) > 1:
+                Ld_t = self.disc_spec_t(Lirr_ad)
+            else:
+                Ld_t = np.zeros(len(self.nu_grid))
+            
+            if self.return_warm == True and len(self.logr_wc_bins) > 1:
+                Lw_t = self.warm_spec_t(Lirr_wc)
+            else:
+                Lw_t = np.zeros(len(self.nu_grid))
+            
+            
+            Ldiff_t, Lref_t = self.wind_spec_t(Lirr_wind)
+            
+            if self.return_ref != True:
+                Lref_t = np.zeros(len(self.nu_grid))
+            
+            
+            if self.return_diff != True:
+                Ldiff_t = np.zeros(len(self.nu_grid))
+       
+            Lh_t = Lh_mean * lxs[j]
+            
+            Ltot_t = Ldiff_t + Lref_t + Ld_t + Lw_t*(1-self.cov_wind) + Lh_t
+            
+
+            if j == 0:
+                Ldiff_all = Ldiff_t
+                Lref_all = Lref_t
+                Ld_all = Ld_t
+                Lw_all = Lw_t
+                Lh_all = Lh_t
+                Ltot_all = Ltot_t
+        
+            
+            else:
+                Ldiff_all = np.column_stack((Ldiff_all, Ldiff_t))
+                Lref_all = np.column_stack((Lref_all, Lref_t))
+                Ld_all = np.column_stack((Ld_all, Ld_t))
+                Lw_all = np.column_stack((Lw_all, Lw_t))
+                Lh_all = np.column_stack((Lh_all, Lh_t))
+                Ltot_all = np.column_stack((Ltot_all, Ltot_t))
+        
+        self.Ldiff_t_all = self._new_units(Ldiff_all)
+        self.Lref_t_all = self._new_units(Lref_all)
+        self.Ld_t_all = self._new_units(Ld_all)
+        self.Lw_t_all = self._new_units(Lw_all)
+        self.Lh_t_all = self._new_units(Lh_all)
+        self.Ltot_t_all = self._new_units(Ltot_all)
+        return self.Ltot_t_all
+    
+    
+    
+    def generate_lightcurve(self, band, band_width, as_frac=True, lxs=None, ts=None):
+        """
+        Generated a light-curve for a band centered on nu, with bandwidth dnu
+        Uses nu_obs/E_obs - as this is in observers frame
+        
+        Currently only does top-hat response/bandpass. Might be updated later.
+        Returnes fluxes integrated over band_width.
+        So units will be:
+            W/m^2         - for SI
+            ergs/s/cm^2   - for cgs
+            counts/s/cm^s - for counts
+        
+        Input MUST be in whatever units you have set units to be!!!
+        i.e if cgs of SI - then Hz,
+            if counts - then keV
+        IF you have NOT set any units - then default is currently SI, and you
+        need to pass band in Hz
+        
+        NOTE: If band_width smaller than bin-width in model grid, then model bin width
+        used instead!
+        Parameters
+        ----------
+        band : float
+            Midpoint in bandpass - units : Hz OR keV.
+        band_width : float
+            Bandwidth - units : Hz or keV.
+        lxs : 1D-array, OPTIONAL
+            X-ray light-curve - only needed if evolved spec NOT already calculated
+        ts : 1D-array, OPTIONAL
+            Light-curve time stamps
+
+        """
+        
+        if hasattr(self, 'Ltot_t_all'):
+            Ltot_all = self.Ltot_t_all
+        else:
+            if lxs == None:
+                raise ValueError('NONE type light-curve not permitted!! \n'
+                                 'Either run evolve_spec() FIRST \n'
+                                 'OR pass a light-curve here!')
+            else:    
+                Ltot_all = self.evolve_spec(lxs, ts)
+        
+        
+        #Mean spec for norm
+        if hasattr(self, 'Lnu_tot'):
+            Lmean = self.Lnu_tot
+        else:
+            Lmean = self.mean_spec()
+        
+        
+        if self.units == 'SI' or self.units == 'cgs':
+            idx_mod_up = np.abs(band + band_width/2 - self.nu_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.nu_obs).argmin()
+            
+            if idx_mod_up == idx_mod_low:
+                Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                Lb_mean = Lmean[idx_mod_up] * band_width
+                
+            else:
+                Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
+                Lcurve = np.trapz(Lc_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
+                Lb_mean = np.trapz(Lmean_band, self.nu_grid[idx_mod_low:idx_mod_up+1])
+            
+        elif self.units == 'counts':
+            idx_mod_up = np.abs(band + band_width/2 - self.E_obs).argmin()
+            idx_mod_low = np.abs(band - band_width/2 - self.E_obs).argmin()
+            
+            if idx_mod_up == idx_mod_low:
+                Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                Lb_mean = Lmean[idx_mod_up] * band_width
+            
+            else:
+                Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
+                Lcurve = np.trapz(Lc_band, self.E_obs[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
+                Lb_mean = np.trapz(Lmean_band, self.E_obs[idx_mod_low:idx_mod_up+1])
+        
+        
+        #print(Ltot_all[:, 0]/Lmean)
+        
+        if as_frac == True:
+            Lc_out = Lcurve/Lb_mean
+        else:
+            Lc_out = Lcurve
+        
+        return Lc_out
+    
+    
+        
 
 class AGNdark_var(AGN):
     
@@ -2286,82 +3054,79 @@ if __name__ == '__main__':
 
     M = 2e8
     dist = 200
-    log_mdot = -1.298
+    log_mdot = -1.27948
     astar = 0
     cosi = 0.9
     kTe_h = 100
-    kTe_w = 0.239
-    gamma_h = 1.97
-    gamma_w = 2.612
-    r_h = 25.69
-    r_w = 377
-    log_rout = 3
+    kTe_w = 0.237102
+    gamma_h = 1.97974
+    gamma_w = 2.61667
+    r_h = 25.0849
+    r_w = 426.778
+    log_rout = 2.30026
     hmax = 10
-    r_l = 200
-    theta_wind = 90
-    cov_wind = 0.3
+    r_l = 400
+    theta_wind = 60
+    cov_wind = 0.809717
+    windAlbedo = 0.5
     T_wind = 1e4
     z = 0
+
+    cdir = '/home/wljw75/Documents/phd/Fairall9_lightCurveCampaign/Spectra/CloudySED/hden14/'
+    cfile = 'rpc_agnBBfit'
     
-    wvar = AGNbiconTH_var(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, 
-                          gamma_h, gamma_w, r_h, r_w, log_rout, hmax, r_l, 
-                          theta_wind, cov_wind, T_wind, z)
+    wvar = AGNbiconTH_var(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h,
+                          gamma_w, r_h, r_w, log_rout, hmax, r_l, theta_wind, 
+                          cov_wind, T_wind, windAlbedo, z)
     
-    
-    avar = AGNsed_var(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h, 
-                      gamma_w, r_h, r_w, log_rout, hmax, z)
-    
-    #wvar.set_onlyWind()
-    
-    #---- Testing spec
+    print(wvar.L_edd * 1e7)
     wvar.set_counts()
     wvar.set_flux()
     
-    Ltot = wvar.mean_spec()
-    Lwind = wvar.Lnu_wind
-    Ld = wvar.Lnu_d
-    Lw = wvar.Lnu_w
-    Lh = wvar.Lnu_h
+    Emid1 = 1e-3
+    dE1 = 5e-4
+    
+    Emid2 = 5e-3
+    dE2 = 1e-3
+    
+    #wvar.set_onlyWind()
+    #----TEsting spec
+    
+    ftot = wvar.mean_spec()
+    fd = wvar.Lnu_d
+    fw = wvar.Lnu_w
+    fh = wvar.Lnu_h
+    fwind = wvar.Lnu_wind
     
     Es = wvar.E_obs
     
+    plt.loglog(Es, Es**2 * fd, color='red', ls='-.')
+    plt.loglog(Es, Es**2 * fw, color='green', ls='-.')
+    plt.loglog(Es, Es**2 * fh, color='blue', ls='-.')
+    plt.loglog(Es, Es**2 * fwind, color='orange', ls='-.')
     
-    plt.loglog(Es, Es**2 * Lwind, color='magenta', ls='-.')
-    plt.loglog(Es, Es**2 * Ld, color='red', ls='-.')
-    plt.loglog(Es, Es**2 * Lw, color='green', ls='-.')
-    plt.loglog(Es, Es**2 * Lh, color='blue', ls='-.')
+    plt.loglog(Es, Es**2 * ftot, color='k')
     
-    plt.loglog(Es, Es**2 * Ltot, color='k')
+    plt.axvspan(Emid1-dE1/2, Emid1+dE1/2, color='green', alpha=0.5)
+    plt.axvspan(Emid2-dE2/2, Emid2+dE2/2, color='orange', alpha=0.5)
     
-    plt.ylim(1e-3, 9e-2)
-    plt.xlim(7e-4, 3e2)
+    plt.ylim(1e-4, 1e-1)
+    plt.xlim(1e-4, 1e3)
+    plt.ylabel(r'EF(E)   keV$^{2}$ (Photons s$^{-1}$ cm$^{-2}$ keV$^{-1}$)')
+    plt.xlabel('Energy   (keV)')
     plt.show()
     
+    """
+    #Testing evolution
+    ts = np.linspace(0, 50, 100)
+    fsx = 0.5*np.sin(ts/5) + 1
     
-    #----Testing Lcurve
-    ts_in = np.linspace(0, 50, 100)
-    fs_in = np.sin(ts_in)/2 + 1
-    fs_in /= np.mean(fs_in)
-    #fs_in = np.ones(len(ts_in))
-    
-    Lnuall = wvar.evolve_spec(fs_in, ts_in)
-    fs_out = wvar.generate_lightcurve(3e-3, 8e-3)
-    
-    plt.plot(ts_in, fs_in)
-    plt.plot(ts_in, fs_out)
-    plt.show()
-    
- 
-    #Comparing to AGNsed
-    avar.set_counts()
-    avar.set_flux()
-    
-    Lavar = avar.evolve_spec(fs_in, ts_in)
-    fs_avar = avar.generate_lightcurve(3e-3, 4e-3)    
-
-    plt.plot(ts_in, fs_out/np.mean(fs_out), color='C1')
-    plt.plot(ts_in, fs_avar/np.mean(fs_avar), color='C2')
+    wvar.evolve_spec(fsx, ts)
+    lc1 = wvar.generate_lightcurve(Emid1, dE1)
+    lc2 = wvar.generate_lightcurve(Emid2, dE2)
+                                   
+    plt.plot(ts, lc1, color='green')
+    plt.plot(ts, lc2, color='orange')
     plt.show()
 
-    
-    
+    """
