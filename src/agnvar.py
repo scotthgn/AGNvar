@@ -1212,7 +1212,7 @@ class AGNsed_var(AGN):
         
             
     def generate_lightcurve(self, band, band_width, as_frac=True, lxs=None, ts=None,
-                            band_units=None):
+                            band_units=None, component='all'):
         """
         Generated a light-curve for a band centered on nu, with bandwidth dnu
         Uses nu_obs/E_obs - as this is in observers frame
@@ -1247,24 +1247,37 @@ class AGNsed_var(AGN):
         band_units : str, OPTIONAL
             Units used for bandpass, If NONE then uses current SED units
             Must be keV or Hz
+        component : str, OPTIONAL
+            If you wish to extract light-curve from single component ONLY
+            Options are:
+                all - Defualt, takes Lcurve from full SED
+                disc - Extract disc component ONLY
+                warm - Extract warm compton component ONLY
+                hot - Extract hot compton compontent ONLY
 
         """
         
+        evSED_dict = {'all':'Ltot_t_all', 'disc':'Ld_t_all', 'warm':'Lw_t_all',
+                      'hot':'Lh_t_all'}
+        mSED_dict = {'all':'Lnu_tot', 'disc':'Lnu_d', 'warm':'Lnu_w', 'hot':'Lnu_h'}
+        
         if hasattr(self, 'Ltot_t_all'):
-            Ltot_all = self.Ltot_t_all
+            Ltot_all = getattr(self, evSED_dict[component])
         else:
             if lxs == None:
                 raise ValueError('NONE type light-curve not permitted!! \n'
                                  'Either run evolve_spec() FIRST \n'
                                  'OR pass a light-curve here!')
             else:    
-                Ltot_all = self.evolve_spec(lxs, ts)
+                self.evolve_spec(lxs, ts)
+                Ltot_all = getattr(self, evSED_dict['component'])
         
         #Mean spec for norm
         if hasattr(self, 'Lnu_tot'):
-            Lmean = self.Lnu_tot
+            Lmean = getattr(self, mSED_dict[component])
         else:
-            Lmean = self.mean_spec()
+            self.mean_spec()
+            Lmean = getattr(self, mSED_dict[component])
         
         
         #Checking units
