@@ -18,6 +18,7 @@ import astropy.units as u
 import astropy.constants as const
 
 from scipy.integrate import quad
+from scipy.interpolate import interp1d
 from pyNTHCOMP import donthcomp
 
 import warnings
@@ -57,7 +58,7 @@ class AGN:
     mu = 0.55 #mean particle mass - fixed at solar abundances
     A = 0.3 #Disc albedo = fixed at 0.3 for now
     
-    dr_dex = 40 #radial grid spacing - N points per decade
+    dr_dex = 100 #radial grid spacing - N points per decade
     dphi = 0.01 #azimuthal grid spacing
     
     units = 'SI' #Default units to be returned
@@ -100,6 +101,7 @@ class AGN:
         self.hmax = hmax
         self.z = z
         
+        
         #Calculating disc params 
         self._calc_risco()
         self._calc_r_selfGravity()
@@ -113,7 +115,8 @@ class AGN:
         
         
         #Creating azimuthal bins
-        self.phis = np.arange(0, 2*np.pi + self.dphi, self.dphi)
+        #self.phis = np.arange(0, 2*np.pi + self.dphi, self.dphi)
+        self.phis = np.arange(self.dphi, 2*np.pi, self.dphi)
         
         #Energy/frequency grid
         self.Egrid = np.geomspace(self.Emin, self.Emax, self.numE)
@@ -124,8 +127,6 @@ class AGN:
         self.E_obs = self.Egrid/(1+self.z)        
         
     
-    
-    
     ##########################################################################
     #---- Units and energy grids
     ##########################################################################
@@ -133,57 +134,207 @@ class AGN:
     def set_cgs(self):
         """
         Changes output spectra to cgs units
-
+    
         """
+        old = self.units
         self.units = 'cgs'
+        
+        self._check_attrUnits(old, self.as_flux)
     
     def set_SI(self):
         """
         changes to si units - NOTE - these are default!!
 
         """
+        old = self.units
         self.units = 'SI'
+
+        self._check_attrUnits(old, self.as_flux)
         
     def set_counts(self):
         """
         Changes output spectra to photons/s/keV
 
         """
+        old = self.units
         self.units = 'counts'
+        
+        self._check_attrUnits(old, self.as_flux)
     
     def set_flux(self):
         """
         Changes output spectra from luminosity to flux
 
         """
+        old=self.as_flux
         self.as_flux = True
+        
+        self._check_attrUnits(self.units, old)
     
+    def set_lum(self):
+        """
+        Changes output from flux to luminosity
+
+        """
+        old = self.as_flux
+        self.as_flux = False
+        
+        self._check_attrUnits(self.units, old)
+    
+    
+    
+    def _check_attrUnits(self, old_unit, old_flux):
+        """
+        Gets called whenever units change. Checks what attributes the instance
+        contains, and converts units accordingly
+
+        """
+        cl_name = self.__class__.__name__
+        disc_names = ['AGNsed_var', 'AGNbiconTH_var', 'AGNbiconTable_var',
+                      'AGNdisc_var', 'AGNwarm_var']
+        
+        
+        #Checking mean spec:
+        if hasattr(self, 'Lnu_tot'):
+            self.Lnu_tot = self._new_units(self.Lnu_tot, old_unit=old_unit,
+                                           old_flux=old_flux)
+            
+            #Now doing components
+            if cl_name in disc_names:
+                #Models that have disc, warm, and hot components
+                self.Lnu_d = self._new_units(self.Lnu_d, old_unit=old_unit,
+                                           old_flux=old_flux)
+            
+                self.Lnu_w = self._new_units(self.Lnu_w, old_unit=old_unit,
+                                           old_flux=old_flux)
+            
+                self.Lnu_h = self._new_units(self.Lnu_h, old_unit=old_unit,
+                                           old_flux=old_flux)
+            
+            
+            if cl_name == 'AGNbiconTH_var':
+                self.Lnu_wind = self._new_units(self.Lnu_wind, old_unit=old_unit,
+                                           old_flux=old_flux)
+            
+            elif cl_name == 'AGNbiconTable_var':
+                self.Lnu_diff = self._new_units(self.Lnu_diff, old_unit=old_unit,
+                                           old_flux=old_flux)
+                self.Lnu_ref = self._new_units(self.Lnu_ref, old_unit=old_unit,
+                                           old_flux=old_flux)
+            
+            
+            elif cl_name == 'AGNdark_var':
+                self.Lnu_ad = self._new_units(self.Lnu_ad, old_unit=old_unit,
+                                              old_flux=old_flux)
+                self.Lnu_dd = self._new_units(self.Lnu_dd, old_unit=old_unit,
+                                              old_flux=old_flux)
+                self.Lnu_c = self._new_units(self.Lnu_c, old_unit=old_unit,
+                                              old_flux=old_flux)
+        
+        
+        #Now checking if we have an evolved spec
+        if hasattr(self, 'Ltot_t_all'):
+            self.Ltot_t_all = self._new_units(self.Ltot_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+            
+            #Now doing components again...
+            if cl_name in disc_names:
+                self.Ld_t_all = self._new_units(self.Ld_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+                self.Lw_t_all = self._new_units(self.Lw_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+                self.Lh_t_all = self._new_units(self.Lh_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+            
+            
+            if cl_name == 'AGNbiconTH_var':
+                self.Lwind_t_all = self._new_units(self.Lwind_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+                
+            
+            elif cl_name == 'AGNbiconTable_var':
+                self.Ldiff_t_all = self._new_units(self.Ldiff_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+                self.Lref_t_all = self._new_units(self.Lref_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+            
+            elif cl_name == 'AGNdark_var':
+                self.Lad_t_all = self._new_units(self.Lad_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+                self.Ldd_t_all = self._new_units(self.Ldd_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+                self.Lc_t_all = self._new_units(self.Lc_t_all, old_unit=old_unit,
+                                              old_flux=old_flux)
+            
+
+
 
     
-    def _new_units(self, Lnus):
+    def _new_units(self, Lnus, old_unit=None, old_flux=False):
         """
         Converts to whatever unit is currently set
-        Always from SI, as this is what the calculations are done in
+        Defualt from SI, as this is what the calculations are done in
 
         """
-        if self.units == 'cgs':
-            Lnus = Lnus*1e7
-        
-        elif self.units == 'counts':
-            flxs = (Lnus * u.W/u.Hz).to(u.keV/u.s/u.keV,
+        if old_unit == None or old_unit == 'SI':
+            if self.units == 'cgs':
+                Lnus = Lnus*1e7
+                
+            elif self.units == 'counts':
+                flxs = (Lnus * u.W/u.Hz).to(u.keV/u.s/u.keV,
                                                 equivalencies=u.spectral()).value
             
-            if np.ndim(flxs) == 1:
-                Lnus = flxs/self.Egrid
+                if np.ndim(flxs) == 1:
+                    Lnus = flxs/self.Egrid
+                else:
+                    Lnus = flxs/self.Egrid[:, np.newaxis]
+        
+            elif self.units == 'SI':
+                pass
+        
+        
+        elif old_unit == 'cgs':
+            if self.units == 'SI':
+                Lnus = Lnus*1e-7
+            
+            elif self.units == 'counts':
+                flxs = (Lnus*u.erg/u.s/u.Hz).to(u.keV/u.s/u.keV,
+                                                equivalencies=u.spectral()).value
+                
+                if np.ndim(flxs) == 1:
+                    Lnus = flxs/self.Egrid
+                else:
+                    Lnus = flxs/self.Egrid[:, np.newaxis]
+            
+            elif self.units == 'cgs':
+                pass
+        
+        
+        elif old_unit == 'counts':
+            
+            if np.ndim(Lnus) == 1:
+                flxs = Lnus * self.Egrid
             else:
-                Lnus = flxs/self.Egrid[:, np.newaxis]
-        
-        elif self.units == 'SI':
-            pass
-        
-        
-        if self.as_flux == True:
+                flxs = Lnus * self.Egrid[:, np.newaxis]
+            
+            if self.units == 'SI':
+                Lnus = (flxs*u.keV/u.s/u.keV).to(u.W/u.Hz,
+                                                 equivalencies=u.spectral()).value
+            
+            elif self.units == 'cgs':
+                Lnus = (flxs*u.keV/u.s/u.keV).to(u.erg/u.s/u.Hz,
+                                                 equivalencies=u.spectral()).value
+            
+            elif self.units == 'counts':
+                pass
+            
+            
+        if self.as_flux == True and old_flux == False:
             Lnus = self._to_flux(Lnus)
+        
+        elif self.as_flux == False and old_flux == True:
+            Lnus = self._to_lum(Lnus)
+        
         
         return Lnus
         
@@ -200,6 +351,19 @@ class AGN:
             dist = self.dl/100
         
         return Lnus/(4*np.pi*dist**2 * (1+self.z))
+    
+    def _to_lum(self, Lnus):
+        """
+        Converts flux to luminsoity.
+
+        """
+        if self.units.__contains__('cgs') or self.units.__contains__('counts'):
+            dist = self.dl
+        else:
+            dist = self.dl/100
+        
+        return Lnus * (4*np.pi*dist**2 * (1+self.z))
+        
     
     
     def new_ear(self, ear):
@@ -468,6 +632,28 @@ class AGN:
         Bnu = pre_fac / exp_fac
         
         return np.pi * Bnu
+    
+    
+    def bb_rad_array(self, Ts):
+        """
+        Black body radiation, but with for an entire annulus
+
+        Parameters
+        ----------
+        Ts : 1D-array
+            Temperature for each grid in annulus
+
+        Returns
+        -------
+        None.
+
+        """
+
+        pre_fac = (2*h*self.nu_grid**3)/(c**2)
+        exp_fac = np.exp((h * self.nu_grid)/(k_B * Ts[:, np.newaxis])) - 1
+        Bnu = pre_fac/exp_fac
+        
+        return np.pi*Bnu
 
 
 
@@ -626,11 +812,22 @@ class AGNsed_var(AGN):
         """
         
         T4ann = self.calc_Ttot(r, Lx_t)
+        
         Tann_mean = np.mean(T4ann**(1/4))
         bb_ann = self.bb_radiance_ann(Tann_mean)
     
         Lnu_ann  = 4*np.pi*r*dr * self.Rg**2 * bb_ann #multiplying by dA to get actual normalisation
-        return Lnu_ann, Tann_mean
+        """
+        if np.ndim(T4ann) == 0:
+            bb_ann =self.bb_radiance_ann(T4ann**(1/4))
+            Lnu_ann = 4*np.pi*r*dr*self.Rg**2 * bb_ann
+        
+        else:
+            bb_ann = self.bb_rad_array(T4ann**(1/4))
+            Lnu_ann = np.sum(2*self.dphi * r*dr*self.Rg**2 * bb_ann,
+                         axis=0)
+        """
+        return Lnu_ann
 
         
     def disc_spec_t(self, Lx_t):
@@ -655,7 +852,7 @@ class AGNsed_var(AGN):
             else:
                 Lx_r = Lx_t[:, i]
                 
-            Lnu_r, Tann = self.disc_annuli(rmid, dr_bin, Lx_r)
+            Lnu_r = self.disc_annuli(rmid, dr_bin, Lx_r)
             
             if i == 0:
                 Lnu_all = Lnu_r
@@ -666,7 +863,7 @@ class AGNsed_var(AGN):
             Lnu_tot = np.sum(Lnu_all, axis=-1)
         else:
             Lnu_tot = Lnu_all
-        
+
         return Lnu_tot *self.cosinc/0.5
     
     
@@ -699,6 +896,7 @@ class AGNsed_var(AGN):
             Spectrum at annulus.
 
         """
+ 
         T4ann = self.calc_Ttot(r, Lx_t)
         Tann_mean = np.mean(T4ann**(1/4))
         
@@ -717,6 +915,32 @@ class AGNsed_var(AGN):
         else:
             Lnu_ann = norm * (ph_nth/radiance)
         
+        """
+        
+        T4ann = self.calc_Ttot(r, Lx_t)
+        for i, t4 in enumerate(T4ann):
+            kT = k_B * (t4**(1/4))
+            kT = (kT * u.J).to(u.keV).value
+
+            ph_nth = donthcomp(self.Egrid, [self.gamma_w, self.kTe_w, 
+                                            kT, 0, 0])
+            ph_nth = (ph_nth * u.W/u.keV).to(u.W/u.Hz, 
+                                             equivalencies=u.spectral()).value
+ 
+            norm = sigma_sb * t4 * 2 * self.dphi*r*dr*self.Rg**2
+            radiance = np.trapz(ph_nth, self.nu_grid)
+            if radiance == 0:
+                Lnu_grd = np.zeros(len(self.nu_grid))
+            else:
+                Lnu_grd = norm * (ph_nth/radiance)
+        
+            if i == 0:
+                Lnu_ann = Lnu_grd
+            else:
+                Lnu_ann = np.column_stack((Lnu_ann, Lnu_grd))
+    
+        Lnu_ann = np.sum(Lnu_ann, axis=-1)
+        """
         return Lnu_ann
     
     
@@ -902,25 +1126,18 @@ class AGNsed_var(AGN):
         
         #Now evolving light-curves!
         Lxs = lxs * self.Lx #array of x-ray lums
-        Lin = np.array([self.Lx]) #array of Ls in play
-        
+        Lin = interp1d(ts, Lxs, kind='linear', fill_value=self.Lx, 
+                       bounds_error=False) #Ensures LC continuus, if outside LC set to Lx
         Lirr_ad = np.ndarray(np.shape(self.tau_ad))
         Lirr_wc = np.ndarray(np.shape(self.tau_wc))
-
+        
         for j in range(len(ts)):
-
-            Lin = np.append(Lin, [Lxs[j]])
-            if j == 0:
-                t_delay = np.array([np.inf])
-            else:
-                t_delay += ts[j] - ts[j-1] #Adding time step to delay array
             
-            t_delay = np.append(t_delay, [0]) #Appending 0 for current emitted
+            tgrid_ad = ts[j] - self.tau_ad #Current time at point on grid
+            tgrid_wc = ts[j] - self.tau_wc
             
-            #Sorting irradiation arrays
-            for k in range(len(t_delay)):
-                Lirr_ad[self.tau_ad <= t_delay[k]] = Lin[k]
-                Lirr_wc[self.tau_wc <= t_delay[k]] = Lin[k]
+            Lirr_ad = Lin(tgrid_ad)
+            Lirr_wc = Lin(tgrid_wc)
             
             #Evolving spectral components
             if self.return_disc == True and len(self.logr_ad_bins) > 1:
@@ -994,7 +1211,8 @@ class AGNsed_var(AGN):
         return self.Lnu_tot
         
             
-    def generate_lightcurve(self, band, band_width, lxs=None, ts=None):
+    def generate_lightcurve(self, band, band_width, as_frac=True, lxs=None, ts=None,
+                            band_units=None):
         """
         Generated a light-curve for a band centered on nu, with bandwidth dnu
         Uses nu_obs/E_obs - as this is in observers frame
@@ -1020,10 +1238,15 @@ class AGNsed_var(AGN):
             Midpoint in bandpass - units : Hz OR keV.
         band_width : float
             Bandwidth - units : Hz or keV.
+        as_frac : Bool, OPTIONAL
+            whether to return fractional light-curve (F/Fmean) - default True
         lxs : 1D-array, OPTIONAL
             X-ray light-curve - only needed if evolved spec NOT already calculated
         ts : 1D-array, OPTIONAL
             Light-curve time stamps
+        band_units : str, OPTIONAL
+            Units used for bandpass, If NONE then uses current SED units
+            Must be keV or Hz
 
         """
         
@@ -1037,6 +1260,38 @@ class AGNsed_var(AGN):
             else:    
                 Ltot_all = self.evolve_spec(lxs, ts)
         
+        #Mean spec for norm
+        if hasattr(self, 'Lnu_tot'):
+            Lmean = self.Lnu_tot
+        else:
+            Lmean = self.mean_spec()
+        
+        
+        #Checking units
+        if band_units != None:
+            if band_units == 'keV':
+                if self.units == 'SI' or self.units == 'cgs':
+                    band = (band*u.keV).to(u.Hz, equivalencies=u.spectral()).value
+                    band_width = (band_width*u.keV).to(u.Hz, 
+                                            equivalencies=u.spectral()).value
+                
+                else:
+                    pass
+            
+            elif band_units == 'Hz':
+                if self.units == 'counts':
+                    band = (band*u.Hz).to(u.keV, equivalencies=u.spectral()).value
+                    band_width = (band_width*u.Hz).to(u.keV,
+                                            equivalencies=u.spectral()).value
+                
+                else:
+                    pass
+            
+            else:
+                raise ValueError('Invalid band_unit!!! \n'
+                                 'band_unit MUST be: None, keV, or Hz')
+            
+        
         
         if self.units == 'SI' or self.units == 'cgs':
             idx_mod_up = np.abs(band + band_width/2 - self.nu_obs).argmin()
@@ -1044,10 +1299,14 @@ class AGNsed_var(AGN):
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                Lb_mean = Lmean[idx_mod_up] * band_width
                 
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
                 Lcurve = np.trapz(Lc_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
+                Lb_mean = np.trapz(Lmean_band, self.nu_grid[idx_mod_low:idx_mod_up+1])
             
         elif self.units == 'counts':
             idx_mod_up = np.abs(band + band_width/2 - self.E_obs).argmin()
@@ -1055,12 +1314,21 @@ class AGNsed_var(AGN):
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                Lb_mean = Lmean[idx_mod_up] * band_width
             
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
                 Lcurve = np.trapz(Lc_band, self.E_obs[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
+                Lb_mean = np.trapz(Lmean_band, self.E_obs[idx_mod_low:idx_mod_up+1])
         
-        return Lcurve
+        if as_frac == True:
+            Lc_out = Lcurve/Lb_mean
+        else:
+            Lc_out = Lcurve
+        
+        return Lc_out
     
     
     
@@ -1543,27 +1811,30 @@ class AGNbiconTH_var(AGNsed_var):
         
         #Now evolving light-curves!
         Lxs = lxs * self.Lx #array of x-ray lums
-        Lin = np.array([self.Lx]) #array of Ls in play
+        Lin = interp1d(ts, Lxs, kind='linear') #Ensures LC continuus
         
         Lirr_ad = np.ndarray(np.shape(self.tau_ad))
         Lirr_wc = np.ndarray(np.shape(self.tau_wc))
         Lirr_wind = np.ndarray(np.shape(self.tau_wind))
 
         for j in range(len(ts)):
+            
+            tgrid_ad = ts[j] - self.tau_ad #Current time at point on grid
+            tgrid_wc = ts[j] - self.tau_wc
+            tgrid_wind = ts[j] - self.tau_wind
+            
+            tgrid_ad[tgrid_ad<0] = 0 #Ensuring nothing -ve to break code...
+            tgrid_wc[tgrid_wc<0] = 0
+            tgrid_wind[tgrid_wind<0] = 0
 
-            Lin = np.append(Lin, [Lxs[j]])
-            if j == 0:
-                t_delay = np.array([np.inf])
-            else:
-                t_delay += ts[j] - ts[j-1] #Adding time step to delay array
+            Lirr_ad = Lin(tgrid_ad)
+            Lirr_wc = Lin(tgrid_wc)
+            Lirr_wind = Lin(tgrid_wind)
             
-            t_delay = np.append(t_delay, [0]) #Appending 0 for current emitted
+            Lirr_ad[tgrid_ad==0] = self.Lx
+            Lirr_wc[tgrid_wc==0] = self.Lx
+            Lirr_wind[tgrid_wind==0] = self.Lx
             
-            #Sorting irradiation arrays
-            for k in range(len(t_delay)):
-                Lirr_ad[self.tau_ad <= t_delay[k]] = Lin[k]
-                Lirr_wc[self.tau_wc <= t_delay[k]] = Lin[k]
-                Lirr_wind[self.tau_wind <= t_delay[k]] = Lin[k]
             
             #Evolving spectral components
             if self.return_disc == True and len(self.logr_ad_bins) > 1:
@@ -2292,8 +2563,8 @@ class AGNbiconTable_var(AGNsed_var):
         
         #Now evolving light-curves!
         Lxs = lxs * self.Lx #array of x-ray lums
-        Lin = np.array([self.Lx]) #array of Ls in play
-        fLin = np.array([1])
+        Lin = interp1d(ts, Lxs) #array of Ls in play
+        fLin = interp1d(ts, lxs)
         
         self._makeWind_dict(lxs)
         
@@ -2301,22 +2572,23 @@ class AGNbiconTable_var(AGNsed_var):
         Lirr_wc = np.ndarray(np.shape(self.tau_wc))
         Lirr_wind = np.ndarray(np.shape(self.tau_wind))
 
-        for j in tqdm(range(len(ts))):
+        for j in range(len(ts)):
+            
+            tgrid_ad = ts[j] - self.tau_ad #Current time at point on grid
+            tgrid_wc = ts[j] - self.tau_wc
+            tgrid_wind = ts[j] - self.tau_wind
+            
+            tgrid_ad[tgrid_ad<0] = 0 #Ensuring nothing -ve to break code...
+            tgrid_wc[tgrid_wc<0] = 0
+            tgrid_wind[tgrid_wind<0] = 0
 
-            Lin = np.append(Lin, [Lxs[j]])
-            fLin = np.append(fLin, [lxs[j]])
-            if j == 0:
-                t_delay = np.array([np.inf])
-            else:
-                t_delay += ts[j] - ts[j-1] #Adding time step to delay array
+            Lirr_ad = Lin(tgrid_ad)
+            Lirr_wc = Lin(tgrid_wc)
+            Lirr_wind = fLin(tgrid_wind)
             
-            t_delay = np.append(t_delay, [0]) #Appending 0 for current emitted
-            
-            #Sorting irradiation arrays
-            for k in range(len(t_delay)):
-                Lirr_ad[self.tau_ad <= t_delay[k]] = Lin[k]
-                Lirr_wc[self.tau_wc <= t_delay[k]] = Lin[k]
-                Lirr_wind[self.tau_wind <= t_delay[k]] = fLin[k]
+            Lirr_ad[tgrid_ad==0] = self.Lx
+            Lirr_wc[tgrid_wc==0] = self.Lx
+            Lirr_wind[tgrid_wind==0] = 1
             
             #Evolving spectral components
             if self.return_disc == True and len(self.logr_ad_bins) > 1:
@@ -2787,24 +3059,24 @@ class AGNdark_var(AGN):
         
         #Now evolving light-curves!
         Lxs = lxs * self.Lx #array of x-ray lums
-        Lin = np.array([self.Lx]) #array of Ls in play
+        Lin = interp1d(ts, Lxs, kind='linear') #Ensures LC continuus
         
         Lirr_ad = np.ndarray(np.shape(self.tau_ad))
         Lirr_dd = np.ndarray(np.shape(self.tau_dd))
-        for j in range(len(ts)):
 
-            Lin = np.append(Lin, [Lxs[j]])
-            if j == 0:
-                t_delay = np.array([np.inf])
-            else:
-                t_delay += ts[j] - ts[j-1] #Adding time step to delay array
+        for j in range(len(ts)):
             
-            t_delay = np.append(t_delay, [0]) #Appending 0 for current emitted
+            tgrid_ad = ts[j] - self.tau_ad #Current time at point on grid
+            tgrid_dd = ts[j] - self.tau_dd
             
-            #Sorting irradiation arrays
-            for k in range(len(t_delay)):
-                Lirr_ad[self.tau_ad <= t_delay[k]] = Lin[k]
-                Lirr_dd[self.tau_dd <= t_delay[k]] = Lin[k]
+            tgrid_ad[tgrid_ad<0] = 0 #Ensuring nothing -ve to break code...
+            tgrid_dd[tgrid_dd<0] = 0
+
+            Lirr_ad = Lin(tgrid_ad)
+            Lirr_dd = Lin(tgrid_dd)
+            
+            Lirr_ad[tgrid_ad==0] = self.Lx
+            Lirr_dd[tgrid_dd==0] = self.Lx
             
             #Evolving spectral components
             if self.return_AD == True and len(self.logr_ad_bins) > 1:
@@ -3046,6 +3318,7 @@ class AGNhot_var(AGNsed_var):
 ##############################################################################
 if __name__ == '__main__': 
     import matplotlib.pyplot as plt
+    import time
 
     M = 2e8
     dist = 200
@@ -3060,8 +3333,8 @@ if __name__ == '__main__':
     r_w = 426.778
     log_rout = 2.30026
     hmax = 10
-    r_l = 400
-    theta_wind = 65
+    r_l = 170
+    theta_wind = 67.5
     cov_wind = 0.809717
     windAlbedo = 0.5
     T_wind = 1e4
@@ -3070,58 +3343,13 @@ if __name__ == '__main__':
     cdir = '/home/wljw75/Documents/phd/Fairall9_lightCurveCampaign/Spectra/CloudySED/hden14/'
     cfile = 'rpc_agnBBfit'
     
-    wvar = AGNbiconTH_var(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h,
-                          gamma_w, r_h, r_w, log_rout, hmax, r_l, theta_wind, 
-                          cov_wind, T_wind, windAlbedo, z)
+    agn = AGNdisc_var(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h,
+                      gamma_w, r_h, r_w, log_rout, hmax, z)
     
-    print(wvar.L_edd * 1e7)
-    wvar.set_counts()
-    wvar.set_flux()
+    ts = np.arange(0, 50, 1)
+    fs = np.sin(ts/5) + 1
     
-    Emid1 = 1e-3
-    dE1 = 5e-4
+    plt.plot(ts, fs)
     
-    Emid2 = 5e-3
-    dE2 = 1e-3
+    #agn.evolve_spec(fs, ts)
     
-    #wvar.set_onlyWind()
-    #----TEsting spec
-    
-    ftot = wvar.mean_spec()
-    fd = wvar.Lnu_d
-    fw = wvar.Lnu_w
-    fh = wvar.Lnu_h
-    fwind = wvar.Lnu_wind
-    
-    Es = wvar.E_obs
-    
-    plt.loglog(Es, Es**2 * fd, color='red', ls='-.')
-    plt.loglog(Es, Es**2 * fw, color='green', ls='-.')
-    plt.loglog(Es, Es**2 * fh, color='blue', ls='-.')
-    plt.loglog(Es, Es**2 * fwind, color='orange', ls='-.')
-    
-    plt.loglog(Es, Es**2 * ftot, color='k')
-    
-    plt.axvspan(Emid1-dE1/2, Emid1+dE1/2, color='green', alpha=0.5)
-    plt.axvspan(Emid2-dE2/2, Emid2+dE2/2, color='orange', alpha=0.5)
-    
-    plt.ylim(1e-4, 1e-1)
-    plt.xlim(1e-4, 1e3)
-    plt.ylabel(r'EF(E)   keV$^{2}$ (Photons s$^{-1}$ cm$^{-2}$ keV$^{-1}$)')
-    plt.xlabel('Energy   (keV)')
-    plt.show()
-    
-    """
-    #Testing evolution
-    ts = np.linspace(0, 50, 100)
-    fsx = 0.5*np.sin(ts/5) + 1
-    
-    wvar.evolve_spec(fsx, ts)
-    lc1 = wvar.generate_lightcurve(Emid1, dE1)
-    lc2 = wvar.generate_lightcurve(Emid2, dE2)
-                                   
-    plt.plot(ts, lc1, color='green')
-    plt.plot(ts, lc2, color='orange')
-    plt.show()
-
-    """
