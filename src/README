@@ -1,3 +1,5 @@
-Main source directory for the agn variability code - contains (at least wil
-soon...) all you need to define your AGN geometry, and then caluclate spectra,
-impulse response functions, or generate model light-curves 
+Main source directory for the agn variability code. 
+All the relevant models and methods lie in the agnvar.py file,
+So this is really the only one you need to worry about
+(Although you will still need to download pyNTHCOMP, as this gets
+Called by some of the models...)

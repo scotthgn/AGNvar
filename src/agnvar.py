@@ -1113,9 +1113,6 @@ class AGNsed_var(AGN):
         if ts[0] != 0:
             ts = ts - ts[0]
         
-        #Now checking that light-curve flux is fractional
-        #if np.mean(lxs) != 1:
-        #    lxs = lxs/np.mean(lxs)
         
         #getting mean hot spec - as this just goes up and down...
         #no time delay for this component...
@@ -1212,7 +1209,7 @@ class AGNsed_var(AGN):
         
             
     def generate_lightcurve(self, band, band_width, as_frac=True, lxs=None, ts=None,
-                            band_units=None, component='all'):
+                            band_units='none', component='all'):
         """
         Generated a light-curve for a band centered on nu, with bandwidth dnu
         Uses nu_obs/E_obs - as this is in observers frame
@@ -1244,10 +1241,10 @@ class AGNsed_var(AGN):
             X-ray light-curve - only needed if evolved spec NOT already calculated
         ts : 1D-array, OPTIONAL
             Light-curve time stamps
-        band_units : str, OPTIONAL
-            Units used for bandpass, If NONE then uses current SED units
+        band_units : {'none', 'keV', 'Hz'}, OPTIONAL
+            Units used for bandpass, If none then uses current SED units
             Must be keV or Hz
-        component : str, OPTIONAL
+        component : {'all', 'disc', 'warm', 'hot'}, OPTIONAL
             If you wish to extract light-curve from single component ONLY
             Options are:
                 all - Defualt, takes Lcurve from full SED
@@ -1281,7 +1278,7 @@ class AGNsed_var(AGN):
         
         
         #Checking units
-        if band_units != None:
+        if band_units != 'none':
             if band_units == 'keV':
                 if self.units == 'SI' or self.units == 'cgs':
                     band = (band*u.keV).to(u.Hz, equivalencies=u.spectral()).value
@@ -1343,109 +1340,6 @@ class AGNsed_var(AGN):
         
         return Lc_out
     
-    
-    
-    
-    """
-    Section for calculating impulse response functions
-    """
-    
-    def response_components(self, band, band_width):
-        """
-        Calculates the response for each disc component for a band
-        with bad_width + the total responese, to a 'delta' function flash in
-        the x-ray.
-        
-        This is to get an idea of how different parts of the accretion flow
-        respond at a given time
-
-        Parameters
-        ----------
-        band : float
-            Band central frequency/energy - units : Hz/keV.
-        band_width : float
-            Band width - units : Hz/keV.
-
-        """
-        
-        tau_max = self.delay_surf(self.r_out, np.pi)
-        self.t_imp = np.linspace(0, tau_max, 200) #Time array for impulse L-curve
-        Tg = (self.Rg/c)/(24*3600) #Light travel time for 1 Rg in days
-        dt = 10*Tg #flash duration
-
-        x_imp = np.full(len(self.t_imp), 1)
-        idx_max = np.abs(dt - self.t_imp).argmin()
-        x_imp[0:idx_max+1] = 2
-
-        
-        Lrp_tot = self.evolve_spec(x_imp, self.t_imp)
-        L_int_all = self.mean_spec()
-        
-        if self.units == 'cgs' or self.units == 'SI':
-            idx_mod_up = np.abs(band + band_width/2 - self.nu_grid).argmin()
-            idx_mod_low = np.abs(band - band_width/2 - self.nu_grid).argmin()
-            
-            if idx_mod_up == idx_mod_low:
-                L_imp = Lrp_tot[idx_mod_up] * band_width #Total responding lcurve
-                L_d_imp = self.Ld_t_all[idx_mod_up] * band_width #disc component
-                L_w_imp = self.Lw_t_all[idx_mod_up] * band_width #warm component
-                L_h_imp = self.Lh_t_all[idx_mod_up] * band_width #hot component
-                L_int = L_int_all[idx_mod_up] * band_width
-            
-            else:
-                Limp_band = Lrp_tot[idx_mod_low:idx_mod_up+1]
-                L_imp = np.trapz(Limp_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
-                
-                L_d_band = self.Ld_t_all[idx_mod_low:idx_mod_up+1]
-                L_d_imp = np.trapz(L_d_band, self.nu_grid[idx_mod_low:idx_mod_low+1])
-                
-                L_w_band = self.Lw_t_all[idx_mod_low:idx_mod_up+1]
-                #L_w_imp = np.trapz(L_w_band, self.nu_grid)
-                
-                Lint_band = L_int_all[idx_mod_low:idx_mod_up+1]
-                L_int = np.trapz(Lint_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
-        
-        elif self.units == 'counts':
-            idx_mod_up = np.abs(band + band_width/2 - self.Egrid).argmin()
-            idx_mod_low = np.abs(band - band_width/2 - self.Egrid).argmin()
-            
-            if idx_mod_up == idx_mod_low:
-                L_int = L_int_all[idx_mod_up, :] * band_width
-            
-            else:
-                Lint_band = L_int_all[idx_mod_low:idx_mod_up+1]
-                L_int = np.trapz(Lint_band, self.Egrid[idx_mod_low:idx_mod_up+1], axis=0)
-                
-        #irf_mod = (L_imp/L_int - 1)/(2*dt)  
-        tot_resp = (L_imp/L_int - 1)/(2*dt)
-        
-        
-        return tot_resp
-    
-    
-    def radial_transfer(self, r, dr):
-        
-        tau_min = self.delay_surf(r, 0)
-        tau_max = self.delay_surf(r, np.pi)
-        Tg = ((self.Rg*dr)/c)/(24*3600) #Light travel time for annulus in days
-        dt = Tg/4 #flash duration
-        delays = np.linspace(0, 8, 1000)
-        
-        def delta(phi, tau):
-            tau_ann = self.delay_surf(r, phi)
-            dirac_gauss = np.exp(-((tau - tau_ann)**2)/(dt**2))
-            return dirac_gauss
-            
-        T = np.array([])
-        for i in range(len(delays)):
-            T_tau = quad(delta, 0, 2*np.pi, args=(delays[i]))[0]
-            T = np.append(T, [T_tau/(2*np.pi)])
-        
-        norm = 1/np.trapz(T, delays)
-        T *= norm
-        return T, delays
-    
-
 
 
 
@@ -1811,10 +1705,6 @@ class AGNbiconTH_var(AGNsed_var):
         if ts[0] != 0:
             ts = ts - ts[0]
         
-        #Now checking that light-curve flux is fractional
-        #if np.mean(lxs) != 1:
-        #    lxs = lxs/np.mean(lxs)
-        
         #getting mean hot spec - as this just goes up and down...
         #no time delay for this component...
         if self.return_hot == True:
@@ -1824,7 +1714,8 @@ class AGNbiconTH_var(AGNsed_var):
         
         #Now evolving light-curves!
         Lxs = lxs * self.Lx #array of x-ray lums
-        Lin = interp1d(ts, Lxs, kind='linear') #Ensures LC continuus
+        Lin = interp1d(ts, Lxs, kind='linear', fill_value=self.Lx,
+                       bounds_error=False) #Ensures LC continuus
         
         Lirr_ad = np.ndarray(np.shape(self.tau_ad))
         Lirr_wc = np.ndarray(np.shape(self.tau_wc))
@@ -1834,19 +1725,11 @@ class AGNbiconTH_var(AGNsed_var):
             
             tgrid_ad = ts[j] - self.tau_ad #Current time at point on grid
             tgrid_wc = ts[j] - self.tau_wc
-            tgrid_wind = ts[j] - self.tau_wind
-            
-            tgrid_ad[tgrid_ad<0] = 0 #Ensuring nothing -ve to break code...
-            tgrid_wc[tgrid_wc<0] = 0
-            tgrid_wind[tgrid_wind<0] = 0
+            tgrid_wind = ts[j] - self.tau_wind            
 
             Lirr_ad = Lin(tgrid_ad)
             Lirr_wc = Lin(tgrid_wc)
             Lirr_wind = Lin(tgrid_wind)
-            
-            Lirr_ad[tgrid_ad==0] = self.Lx
-            Lirr_wc[tgrid_wc==0] = self.Lx
-            Lirr_wind[tgrid_wind==0] = self.Lx
             
             
             #Evolving spectral components
@@ -1892,7 +1775,8 @@ class AGNbiconTH_var(AGNsed_var):
 
 
 
-    def generate_lightcurve(self, band, band_width, as_frac=True, lxs=None, ts=None):
+    def generate_lightcurve(self, band, band_width, as_frac=True, lxs=None, ts=None,
+                            band_units='none', component='all'):
         """
         Generated a light-curve for a band centered on nu, with bandwidth dnu
         Uses nu_obs/E_obs - as this is in observers frame
@@ -1918,29 +1802,74 @@ class AGNbiconTH_var(AGNsed_var):
             Midpoint in bandpass - units : Hz OR keV.
         band_width : float
             Bandwidth - units : Hz or keV.
+        as_frac : Bool, OPTIONAL
+            whether to return fractional light-curve (F/Fmean) - default True
         lxs : 1D-array, OPTIONAL
             X-ray light-curve - only needed if evolved spec NOT already calculated
         ts : 1D-array, OPTIONAL
             Light-curve time stamps
+        band_units : {'none', 'keV', 'Hz'}, OPTIONAL
+            Units used for bandpass, If none then uses current SED units
+            Must be keV or Hz
+        component : {'all', 'disc', 'warm', 'hot', 'wind'}, OPTIONAL
+            If you wish to extract light-curve from single component ONLY
+            Options are:
+                all - Defualt, takes Lcurve from full SED
+                disc - Extract disc component ONLY
+                warm - Extract warm compton component ONLY
+                hot - Extract hot compton compontent ONLY
+                wind - thermal re-processor outflow component ONLY
 
         """
         
+        evSED_dict = {'all':'Ltot_t_all', 'disc':'Ld_t_all', 'warm':'Lw_t_all',
+                      'hot':'Lh_t_all', 'wind':'Lwind_t_all'}
+        mSED_dict = {'all':'Lnu_tot', 'disc':'Lnu_d', 'warm':'Lnu_w', 'hot':'Lnu_h',
+                     'wind':'Lnu_wind'}
+        
         if hasattr(self, 'Ltot_t_all'):
-            Ltot_all = self.Ltot_t_all
+            Ltot_all = getattr(self, evSED_dict[component])
         else:
             if lxs == None:
                 raise ValueError('NONE type light-curve not permitted!! \n'
                                  'Either run evolve_spec() FIRST \n'
                                  'OR pass a light-curve here!')
             else:    
-                Ltot_all = self.evolve_spec(lxs, ts)
-        
+                self.evolve_spec(lxs, ts)
+                Ltot_all = getattr(self, evSED_dict['component'])
         
         #Mean spec for norm
         if hasattr(self, 'Lnu_tot'):
-            Lmean = self.Lnu_tot
+            Lmean = getattr(self, mSED_dict[component])
         else:
-            Lmean = self.mean_spec()
+            self.mean_spec()
+            Lmean = getattr(self, mSED_dict[component])
+        
+        
+        #Checking units
+        if band_units != 'none':
+            if band_units == 'keV':
+                if self.units == 'SI' or self.units == 'cgs':
+                    band = (band*u.keV).to(u.Hz, equivalencies=u.spectral()).value
+                    band_width = (band_width*u.keV).to(u.Hz, 
+                                            equivalencies=u.spectral()).value
+                
+                else:
+                    pass
+            
+            elif band_units == 'Hz':
+                if self.units == 'counts':
+                    band = (band*u.Hz).to(u.keV, equivalencies=u.spectral()).value
+                    band_width = (band_width*u.Hz).to(u.keV,
+                                            equivalencies=u.spectral()).value
+                
+                else:
+                    pass
+            
+            else:
+                raise ValueError('Invalid band_unit!!! \n'
+                                 'band_unit MUST be: None, keV, or Hz')
+            
         
         
         if self.units == 'SI' or self.units == 'cgs':
@@ -1973,9 +1902,6 @@ class AGNbiconTH_var(AGNsed_var):
                 Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
                 Lb_mean = np.trapz(Lmean_band, self.E_obs[idx_mod_low:idx_mod_up+1])
         
-        
-        #print(Ltot_all[:, 0]/Lmean)
-        
         if as_frac == True:
             Lc_out = Lcurve/Lb_mean
         else:
@@ -1987,6 +1913,8 @@ class AGNbiconTH_var(AGNsed_var):
 
 class AGNbiconTable_var(AGNsed_var):
     """
+    STILL IN DEVELOPMENT! There may be bugs. You have been warned!!
+    
     Same geometry and principle as AGNbiconTH_var - however instead of considering
     a simple black-body shape from the wind, this reads a CLOUDY output file.
     
@@ -2755,7 +2683,7 @@ class AGNdark_var(AGN):
     """
     A model where you have a standard disc extending to risco. However below
     some darkeining radius, r_d, all accretion power is transported to the corona
-    (probably through magnetic fields or something...)
+    (essentially  a comparison to Kammoun et al 2021 (albeit with no GR...))
     Hence, in the region r_d to risco, you only see the contribution due to 
     re-processing
     """
@@ -3072,7 +3000,8 @@ class AGNdark_var(AGN):
         
         #Now evolving light-curves!
         Lxs = lxs * self.Lx #array of x-ray lums
-        Lin = interp1d(ts, Lxs, kind='linear') #Ensures LC continuus
+        Lin = interp1d(ts, Lxs, kind='linear', fill_value=self.Lx,
+                       bounds_error=False) #Ensures LC continuus
         
         Lirr_ad = np.ndarray(np.shape(self.tau_ad))
         Lirr_dd = np.ndarray(np.shape(self.tau_dd))
@@ -3081,15 +3010,9 @@ class AGNdark_var(AGN):
             
             tgrid_ad = ts[j] - self.tau_ad #Current time at point on grid
             tgrid_dd = ts[j] - self.tau_dd
-            
-            tgrid_ad[tgrid_ad<0] = 0 #Ensuring nothing -ve to break code...
-            tgrid_dd[tgrid_dd<0] = 0
 
             Lirr_ad = Lin(tgrid_ad)
             Lirr_dd = Lin(tgrid_dd)
-            
-            Lirr_ad[tgrid_ad==0] = self.Lx
-            Lirr_dd[tgrid_dd==0] = self.Lx
             
             #Evolving spectral components
             if self.return_AD == True and len(self.logr_ad_bins) > 1:
@@ -3159,7 +3082,8 @@ class AGNdark_var(AGN):
         return self.Lnu_tot
     
     
-    def generate_lightcurve(self, band, band_width, lxs=None, ts=None):
+    def generate_lightcurve(self, band, band_width, as_frac=True, lxs=None, ts=None,
+                            band_units='none', component='all'):
         """
         Generated a light-curve for a band centered on nu, with bandwidth dnu
         
@@ -3184,22 +3108,72 @@ class AGNdark_var(AGN):
             Midpoint in bandpass - units : Hz OR keV.
         band_width : float
             Bandwidth - units : Hz or keV.
+        as_frac : Bool, OPTIONAL
+            whether to return fractional light-curve (F/Fmean) - default True
         lxs : 1D-array, OPTIONAL
             X-ray light-curve - only needed if evolved spec NOT already calculated
         ts : 1D-array, OPTIONAL
             Light-curve time stamps
-
+        band_units : {'none', 'keV', 'all'}, 
+            Units used for bandpass, If none then uses current SED units
+            Must be keV or Hz
+        component : {'all', 'disc', 'dark', 'cor'}, OPTIONAL
+            If you wish to extract light-curve from single component ONLY
+            Options are:
+                all - Defualt, takes Lcurve from full SED
+                disc - Extract standard disc component ONLY
+                dark - Extract dark disc component ONLY
+                cor - Extract coronal component ONLY
+            
         """
         
+        evSED_dict = {'all':'Ltot_t_all', 'disc':'Lad_t_all', 'dark':'Ldd_t_all',
+                      'cor':'Lc_t_all'}
+        mSED_dict = {'all':'Lnu_tot', 'disc':'Lnu_ad', 'dark':'Lnu_dd', 'cor':'Lnu_c'}
+        
         if hasattr(self, 'Ltot_t_all'):
-            Ltot_all = self.Ltot_t_all
+            Ltot_all = getattr(self, evSED_dict[component])
         else:
             if lxs == None:
                 raise ValueError('NONE type light-curve not permitted!! \n'
                                  'Either run evolve_spec() FIRST \n'
                                  'OR pass a light-curve here!')
             else:    
-                Ltot_all = self.evolve_spec(lxs, ts)
+                self.evolve_spec(lxs, ts)
+                Ltot_all = getattr(self, evSED_dict['component'])
+        
+        #Mean spec for norm
+        if hasattr(self, 'Lnu_tot'):
+            Lmean = getattr(self, mSED_dict[component])
+        else:
+            self.mean_spec()
+            Lmean = getattr(self, mSED_dict[component])
+        
+        
+        #Checking units
+        if band_units != 'none':
+            if band_units == 'keV':
+                if self.units == 'SI' or self.units == 'cgs':
+                    band = (band*u.keV).to(u.Hz, equivalencies=u.spectral()).value
+                    band_width = (band_width*u.keV).to(u.Hz, 
+                                            equivalencies=u.spectral()).value
+                
+                else:
+                    pass
+            
+            elif band_units == 'Hz':
+                if self.units == 'counts':
+                    band = (band*u.Hz).to(u.keV, equivalencies=u.spectral()).value
+                    band_width = (band_width*u.Hz).to(u.keV,
+                                            equivalencies=u.spectral()).value
+                
+                else:
+                    pass
+            
+            else:
+                raise ValueError('Invalid band_unit!!! \n'
+                                 'band_unit MUST be: None, keV, or Hz')
+            
         
         
         if self.units == 'SI' or self.units == 'cgs':
@@ -3208,10 +3182,14 @@ class AGNdark_var(AGN):
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                Lb_mean = Lmean[idx_mod_up] * band_width
                 
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
-                Lcurve = np.trapz(Lc_band, self.nu_obs[idx_mod_low:idx_mod_up+1], axis=0)
+                Lcurve = np.trapz(Lc_band, self.nu_grid[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
+                Lb_mean = np.trapz(Lmean_band, self.nu_grid[idx_mod_low:idx_mod_up+1])
             
         elif self.units == 'counts':
             idx_mod_up = np.abs(band + band_width/2 - self.E_obs).argmin()
@@ -3219,12 +3197,21 @@ class AGNdark_var(AGN):
             
             if idx_mod_up == idx_mod_low:
                 Lcurve = Ltot_all[idx_mod_up, :] * band_width
+                Lb_mean = Lmean[idx_mod_up] * band_width
             
             else:
                 Lc_band = Ltot_all[idx_mod_low:idx_mod_up+1, :]
                 Lcurve = np.trapz(Lc_band, self.E_obs[idx_mod_low:idx_mod_up+1], axis=0)
+                
+                Lmean_band = Lmean[idx_mod_low:idx_mod_up+1]
+                Lb_mean = np.trapz(Lmean_band, self.E_obs[idx_mod_low:idx_mod_up+1])
         
-        return Lcurve
+        if as_frac == True:
+            Lc_out = Lcurve/Lb_mean
+        else:
+            Lc_out = Lcurve
+        
+        return Lc_out
         
 
 
@@ -3326,43 +3313,5 @@ class AGNhot_var(AGNsed_var):
     
 
 
-##############################################################################
-#---- Testing 
-##############################################################################
-if __name__ == '__main__': 
-    import matplotlib.pyplot as plt
-    import time
 
-    M = 2e8
-    dist = 200
-    log_mdot = -1.27948
-    astar = 0
-    cosi = 0.9
-    kTe_h = 100
-    kTe_w = 0.237102
-    gamma_h = 1.97974
-    gamma_w = 2.61667
-    r_h = 25.0849
-    r_w = 426.778
-    log_rout = 2.30026
-    hmax = 10
-    r_l = 170
-    theta_wind = 67.5
-    cov_wind = 0.809717
-    windAlbedo = 0.5
-    T_wind = 1e4
-    z = 0
-
-    cdir = '/home/wljw75/Documents/phd/Fairall9_lightCurveCampaign/Spectra/CloudySED/hden14/'
-    cfile = 'rpc_agnBBfit'
-    
-    agn = AGNdisc_var(M, dist, log_mdot, astar, cosi, kTe_h, kTe_w, gamma_h,
-                      gamma_w, r_h, r_w, log_rout, hmax, z)
-    
-    ts = np.arange(0, 50, 1)
-    fs = np.sin(ts/5) + 1
-    
-    plt.plot(ts, fs)
-    
-    #agn.evolve_spec(fs, ts)
     
