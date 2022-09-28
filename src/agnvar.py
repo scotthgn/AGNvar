@@ -22,7 +22,7 @@ from scipy.interpolate import interp1d
 from pyNTHCOMP import donthcomp
 
 import warnings
-from tqdm import tqdm
+
 
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
