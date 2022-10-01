@@ -4,11 +4,28 @@
 Created on Fri Apr  1 10:56:36 2022
 
 @author: Scott Hagen
-"""
 
-"""
-Module to define an AGN geometry - and then calculate spectra, impulse response
-functions, and model light-curves (based off an input HX light-curve).
+
+Module to define an AGN geometry - and then calculate spectr and model 
+light-curves (based off an input HX light-curve).
+
+Currently there are three main models:
+    AGNsed_var : Follows the scenario presented in Kubota & Done (2018),
+        consisiting of a radially stratified flow, with standard outer disc,
+        warm Comptonization region (disc geometry), and a hot Comptonizating
+        corona.
+    
+    AGNbiconTH_var : Same as AGNsed_var, but with an additional thermal
+        component; presumed to arise from a bi-conical outflow
+    
+    AGNdark_var : Standard accretion disc extending down to r_isco, however
+        below darkening radius r_d ALL the intrinsic disc power is transferred
+        to the X-ray corona. Hence, below r_d we only see a disc contribution
+        from the re-processed component. This is slighlty similar to the 
+        picture presented in Kammoun et al (2021), however we do not include
+        GR.
+
+If this code has been usefull in your work, please reference Hagen & Done (in prep.)
 
 """
 
@@ -22,7 +39,7 @@ from scipy.interpolate import interp1d
 from pyNTHCOMP import donthcomp
 
 import warnings
-from tqdm import tqdm
+
 
 
 #Stop all the run-time warnings (we know why they happen - doesn't affect the output!)
@@ -1440,6 +1457,9 @@ class AGNbiconTH_var(AGNsed_var):
             Wind covering fraction - units : dOmega/4pi
         T_wind : float
             Wind emission temperature (for BB emission) - units : K
+        windAlbedo : float
+            Determines the fraction of intercepted X-rays that are reprocessed/
+            reflected. e.g 0.6 would imply 40% reprocessed, 60% reflected
         z : float
             Redshift
         """
