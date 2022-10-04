@@ -674,6 +674,115 @@ class AGN:
 
 
 
+    ###########################################################################
+    #---- Methods for extracting accretion properties
+    ###########################################################################
+    
+    def get_Luminosity(self, xmin=None, xmax=None, xunit='keV', frame='obs'):
+        """
+        Get luminosity integrated over a given range (or for single energy)
+        Returns luminosity in either W or ergs/s (depending on what the current
+        unit attribute is)
+        
+        If you want monochromatic luminosity for single energy/wavelength 
+        (e.g L2500) then only pass xmin, leaving xmax as 
+        Note, if monochromatic then returns nu*Lnu
+        
+        If both xmin and xmax are None, then integrates over the entire SED
+        
+
+        Parameters
+        ----------
+        xmin : float, optional
+            Min energy/frequecny/wavelength. The default is None.
+        xmax : float, optional
+            Max energy/frequency/wavelength. The default is None.
+        xunit : {'keV', 'Hz', 'AA'}, optional
+            X-axis units. The default is 'keV'.
+        frame : {'obs', 'BH'}, optional
+            Frame to calculate luminosity in. If 'obs', then includes the
+            redshift. If 'BH', then calculates in rest frame of black hole
+            (so no redhsift). The default is 'obs'
+
+        Returns
+        -------
+        Lum : float
+            Luminosity integrated over given range.
+
+        """
+        
+        if hasattr(self, 'Lnu_tot'):
+            Lnu = self.Lnu_tot
+        else:
+            Lnu = self.mean_spec()
+        
+        
+        if self.units == 'counts':
+            self.set_cgs()
+            Lnu = self._new_units(Lnu, old_unit='counts')
+            self.set_counts() #reverting back to user choice
+        
+        
+        if self.as_flux:
+            Lnu = self._to_lum(Lnu)
+        
+        
+        if frame == 'BH':
+            nus = self.nu_grid
+        else:
+            nus = self.nu_obs
+        
+        
+        if xmin == None and xmax == None:
+            Lum = np.trapz(Lnu, nus) #If no limits, then full SED
+        
+        elif xmin == None or xmax == None: #If monochromatic
+            try:
+                nu = (xmin*u.Unit(xunit)).to(u.Hz, equivalencies=u.spectral()).value
+            except:
+                nu = (xmax*u.Unit(xunit)).to(u.Hz, equivalencies=u.spectral()).value
+            
+            idx_nu = np.abs(nu - nus).argmin()
+            Lum = Lnu[idx_nu] * nu
+        
+        else:
+            numin = (xmin*u.Unit(xunit)).to(u.Hz, equivalencies=u.spectral()).value
+            numax = (xmax*u.Unit(xunit)).to(u.Hz, equivalencies=u.spectral()).value
+            
+            if numin > numax: #If units Angstrom (AA) this can happen..
+                nui = numax
+                numax = numin
+                numin = nui
+            
+            idx_min = np.abs(numin - nus).argmin()
+            idx_max = np.abs(numax - nus).argmin()
+            
+            Lum = np.trapz(Lnu[idx_min:idx_max+1], nus[idx_min:idx_max+1])
+        
+        return Lum
+    
+    
+    def get_Ledd(self):
+        Ledd = self.L_edd
+        
+        oldf = self.as_flux
+        self.set_lum()
+        
+        if self.units == 'counts':
+            self.set_cgs()
+            Ledd = self._new_units(Ledd)
+            self.set_counts()
+        
+        else:
+            Ledd = self._new_units(Ledd)
+        
+        if oldf:
+            self.set_flux()
+        
+        return Ledd
+        
+    
+            
 ##############################################################################
 #---- The main Composite models
 ##############################################################################
