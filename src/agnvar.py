@@ -33,6 +33,7 @@ If this code has been usefull in your work, please reference Hagen & Done (in pr
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
+from astropy.io import fits
 
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
@@ -1466,8 +1467,115 @@ class AGNsed_var(AGN):
         
         return Lc_out
     
+    
+    def generate_LC_fromRSP(self, rspfile, as_frac=True, lxs=None, ts=None,
+                            band_units='none', component='all'):
+        """
+        Generates a light-curve, however instead of assuming a top-hat 
+        bandpass this uses the instrument response file to explicitly
+        determine the sensitivity
+        
+        Currently set up for .rsp files following the same fits format as 
+        the swift-UVOT response files
 
+        Parameters
+        ----------
+        rspfile : str
+            Input response-file.
+        as_frac : Bool, optional
+            whether to return fractional light-curve (F/Fmean) - default True
 
+        Returns
+        -------
+        None.
+
+        """
+        
+        evSED_dict = {'all':'Ltot_t_all', 'disc':'Ld_t_all', 'warm':'Lw_t_all',
+                      'hot':'Lh_t_all'}
+        mSED_dict = {'all':'Lnu_tot', 'disc':'Lnu_d', 'warm':'Lnu_w', 'hot':'Lnu_h'}
+        
+        if hasattr(self, 'Ltot_t_all'):
+            Ltot_all = getattr(self, evSED_dict[component])
+        else:
+            if lxs == None:
+                raise ValueError('NONE type light-curve not permitted!! \n'
+                                 'Either run evolve_spec() FIRST \n'
+                                 'OR pass a light-curve here!')
+            else:    
+                self.evolve_spec(lxs, ts)
+                Ltot_all = getattr(self, evSED_dict['component'])
+        
+        #Mean spec for norm
+        if hasattr(self, 'Lnu_tot'):
+            Lmean = getattr(self, mSED_dict[component])
+        else:
+            self.mean_spec()
+            Lmean = getattr(self, mSED_dict[component])
+    
+    
+        #Importing repsonse matrix
+        with fits.open(rspfile) as rf:
+            rmat = rf[1].data #response matrix
+            rEl = np.array(rmat.field(0)) #left E bin edge
+            rEr = np.array(rmat.field(1)) #right E bin edge
+            rsp = np.array(rmat.field(5)) #Filter response (cm^2)
+        
+        rEm = rEl + 0.5*(rEr - rEl) #midpoint
+        
+        #response matrix always in keV, so now checking units in SED
+        #Want units ph/s/cm^-2/keV in order to convolve with response
+        if self.units == 'keV':
+            pass
+        elif self.units == 'cgs':
+            Ltot_all = (Ltot_all*u.erg/u.s/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            Lmean = (Lmean*u.erg/u.s/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+                
+            flux_corr = 1
+                
+            
+        else:
+            Ltot_all = (Ltot_all*u.W/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            Lmean = (Lmean*u.W/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            
+            flux_corr = 100**(-2) #flux correction facotr (i.e from m^-2 to cm^-2)
+        
+        #Since convolving with response need flux units - this will give
+        #total counts per second as observed by filter
+        if self.as_flux == False:
+            Ltot_all = self._to_flux(Ltot_all) * flux_corr
+            Lmean = self._to_flux(Lmean) * flux_corr
+        
+        else:
+            Ltot_all *= flux_corr
+            Lmean *= flux_corr
+        
+        
+        #for each time-step, interpolating SED and then convolving with filter
+        #response
+        LC_out = np.array([])
+        for i in range(len(Ltot_all[0, :])):
+            Lt_interp = interp1d(self.E_obs, Ltot_all[:, i], kind='linear')
+            
+            LC_t = np.trapz(Lt_interp(rEm)*rsp, rEm) #Convolving with response
+            LC_out = np.append(LC_out, LC_t)
+        
+        if as_frac == True:
+            Lm_interp = interp1d(self.E_obs, Lmean, kind='linear')
+            Lm_filt = np.trapz(Lm_interp(rEm)*rsp, rEm)
+            
+            LC_out /= Lm_filt
+        
+        return LC_out
+        
+        
+            
+            
+        
 
 
 
@@ -2037,6 +2145,112 @@ class AGNbiconTH_var(AGNsed_var):
             Lc_out = Lcurve
         
         return Lc_out
+    
+    
+    def generate_LC_fromRSP(self, rspfile, as_frac=True, lxs=None, ts=None,
+                            band_units='none', component='all'):
+        """
+        Generates a light-curve, however instead of assuming a top-hat 
+        bandpass this uses the instrument response file to explicitly
+        determine the sensitivity
+        
+        Currently set up for .rsp files following the same fits format as 
+        the swift-UVOT response files
+
+        Parameters
+        ----------
+        rspfile : str
+            Input response-file.
+        as_frac : Bool, optional
+            whether to return fractional light-curve (F/Fmean) - default True
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        evSED_dict = {'all':'Ltot_t_all', 'disc':'Ld_t_all', 'warm':'Lw_t_all',
+                      'hot':'Lh_t_all', 'wind':'Lwind_t_all'}
+        mSED_dict = {'all':'Lnu_tot', 'disc':'Lnu_d', 'warm':'Lnu_w', 'hot':'Lnu_h',
+                     'wind':'Lnu_wind'}
+        
+        if hasattr(self, 'Ltot_t_all'):
+            Ltot_all = getattr(self, evSED_dict[component])
+        else:
+            if lxs == None:
+                raise ValueError('NONE type light-curve not permitted!! \n'
+                                 'Either run evolve_spec() FIRST \n'
+                                 'OR pass a light-curve here!')
+            else:    
+                self.evolve_spec(lxs, ts)
+                Ltot_all = getattr(self, evSED_dict['component'])
+        
+        #Mean spec for norm
+        if hasattr(self, 'Lnu_tot'):
+            Lmean = getattr(self, mSED_dict[component])
+        else:
+            self.mean_spec()
+            Lmean = getattr(self, mSED_dict[component])
+    
+    
+        #Importing repsonse matrix
+        with fits.open(rspfile) as rf:
+            rmat = rf[1].data #response matrix
+            rEl = np.array(rmat.field(0)) #left E bin edge
+            rEr = np.array(rmat.field(1)) #right E bin edge
+            rsp = np.array(rmat.field(5)) #Filter response (cm^2)
+        
+        rEm = rEl + 0.5*(rEr - rEl) #midpoint
+        
+        #response matrix always in keV, so now checking units in SED
+        #Want units ph/s/cm^-2/keV in order to convolve with response
+        if self.units == 'keV':
+            pass
+        elif self.units == 'cgs':
+            Ltot_all = (Ltot_all*u.erg/u.s/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            Lmean = (Lmean*u.erg/u.s/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+                
+            flux_corr = 1
+                
+            
+        else:
+            Ltot_all = (Ltot_all*u.W/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            Lmean = (Lmean*u.W/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            
+            flux_corr = 100**(-2) #flux correction facotr (i.e from m^-2 to cm^-2)
+        
+        #Since convolving with response need flux units - this will give
+        #total counts per second as observed by filter
+        if self.as_flux == False:
+            Ltot_all = self._to_flux(Ltot_all) * flux_corr
+            Lmean = self._to_flux(Lmean) * flux_corr
+        
+        else:
+            Ltot_all *= flux_corr
+            Lmean *= flux_corr
+        
+        
+        #for each time-step, interpolating SED and then convolving with filter
+        #response
+        LC_out = np.array([])
+        for i in range(len(Ltot_all[0, :])):
+            Lt_interp = interp1d(self.E_obs, Ltot_all[:, i], kind='linear')
+            
+            LC_t = np.trapz(Lt_interp(rEm)*rsp, rEm) #Convolving with response
+            LC_out = np.append(LC_out, LC_t)
+        
+        if as_frac == True:
+            Lm_interp = interp1d(self.E_obs, Lmean, kind='linear')
+            Lm_filt = np.trapz(Lm_interp(rEm)*rsp, rEm)
+            
+            LC_out /= Lm_filt
+        
+        return LC_out
 
 
 
@@ -3342,6 +3556,111 @@ class AGNdark_var(AGN):
         
         return Lc_out
         
+    
+    def generate_LC_fromRSP(self, rspfile, as_frac=True, lxs=None, ts=None,
+                            band_units='none', component='all'):
+        """
+        Generates a light-curve, however instead of assuming a top-hat 
+        bandpass this uses the instrument response file to explicitly
+        determine the sensitivity
+        
+        Currently set up for .rsp files following the same fits format as 
+        the swift-UVOT response files
+
+        Parameters
+        ----------
+        rspfile : str
+            Input response-file.
+        as_frac : Bool, optional
+            whether to return fractional light-curve (F/Fmean) - default True
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        evSED_dict = {'all':'Ltot_t_all', 'disc':'Lad_t_all', 'dark':'Ldd_t_all',
+                      'cor':'Lc_t_all'}
+        mSED_dict = {'all':'Lnu_tot', 'disc':'Lnu_ad', 'dark':'Lnu_dd', 'cor':'Lnu_c'}
+        
+        if hasattr(self, 'Ltot_t_all'):
+            Ltot_all = getattr(self, evSED_dict[component])
+        else:
+            if lxs == None:
+                raise ValueError('NONE type light-curve not permitted!! \n'
+                                 'Either run evolve_spec() FIRST \n'
+                                 'OR pass a light-curve here!')
+            else:    
+                self.evolve_spec(lxs, ts)
+                Ltot_all = getattr(self, evSED_dict['component'])
+        
+        #Mean spec for norm
+        if hasattr(self, 'Lnu_tot'):
+            Lmean = getattr(self, mSED_dict[component])
+        else:
+            self.mean_spec()
+            Lmean = getattr(self, mSED_dict[component])
+    
+    
+        #Importing repsonse matrix
+        with fits.open(rspfile) as rf:
+            rmat = rf[1].data #response matrix
+            rEl = np.array(rmat.field(0)) #left E bin edge
+            rEr = np.array(rmat.field(1)) #right E bin edge
+            rsp = np.array(rmat.field(5)) #Filter response (cm^2)
+        
+        rEm = rEl + 0.5*(rEr - rEl) #midpoint
+        
+        #response matrix always in keV, so now checking units in SED
+        #Want units ph/s/cm^-2/keV in order to convolve with response
+        if self.units == 'keV':
+            pass
+        elif self.units == 'cgs':
+            Ltot_all = (Ltot_all*u.erg/u.s/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            Lmean = (Lmean*u.erg/u.s/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+                
+            flux_corr = 1
+                
+            
+        else:
+            Ltot_all = (Ltot_all*u.W/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            Lmean = (Lmean*u.W/u.Hz).to(u.keV/u.s/u.keV,
+                                            equivalencies=u.spectral()).value
+            
+            flux_corr = 100**(-2) #flux correction facotr (i.e from m^-2 to cm^-2)
+        
+        #Since convolving with response need flux units - this will give
+        #total counts per second as observed by filter
+        if self.as_flux == False:
+            Ltot_all = self._to_flux(Ltot_all) * flux_corr
+            Lmean = self._to_flux(Lmean) * flux_corr
+        
+        else:
+            Ltot_all *= flux_corr
+            Lmean *= flux_corr
+        
+        
+        #for each time-step, interpolating SED and then convolving with filter
+        #response
+        LC_out = np.array([])
+        for i in range(len(Ltot_all[0, :])):
+            Lt_interp = interp1d(self.E_obs, Ltot_all[:, i], kind='linear')
+            
+            LC_t = np.trapz(Lt_interp(rEm)*rsp, rEm) #Convolving with response
+            LC_out = np.append(LC_out, LC_t)
+        
+        if as_frac == True:
+            Lm_interp = interp1d(self.E_obs, Lmean, kind='linear')
+            Lm_filt = np.trapz(Lm_interp(rEm)*rsp, rEm)
+            
+            LC_out /= Lm_filt
+        
+        return LC_out
+    
 
 
 
