@@ -1,8 +1,8 @@
 # AGNvar
 
 Python code for constructing time-dependent SEDs using an input driving X-ray light-curve.
-If you use this code in your work, please reference Hagen & Done (2022, submitted)
-https://ui.adsabs.harvard.edu/abs/2022arXiv221004924H/abstract
+If you use this code in your work, please reference Hagen & Done (2023)
+https://ui.adsabs.harvard.edu/abs/2023MNRAS.521..251H/abstract
 
 
 Requirements
@@ -37,7 +37,7 @@ a variable X-ray source irradiating the accretion flow. To this extent it is des
      to take the results from the set of time-dependent SEDs and extract the light-curve in
      a given band pass
  
- For more details on the model, see Hagen & Done (in prep.)
+ For more details on the model, see Hagen & Done (2023)
  
  
  Available models
@@ -71,4 +71,35 @@ Future intentions
   
 
 Hope you find the code useful! 
+
+
+Citing AGNvar
+-------------
+If you use AGNvar in you work / publications please cite Hagen & Done (2023).
+https://ui.adsabs.harvard.edu/abs/2023MNRAS.521..251H/abstract
+
+Journal reference: Hagen S., Done C., 2023, MNRAS, 521, 251
+
+Bibtex:
+
+```
+@ARTICLE{2023MNRAS.521..251H,
+       author = {{Hagen}, Scott and {Done}, Chris},
+        title = "{Modelling continuum reverberation in active galactic nuclei: a spectral-timing analysis of the ultraviolet variability through X-ray reverberation in Fairall 9}",
+      journal = {\mnras},
+     keywords = {accretion, accretion discs, black hole physics, galaxies: active, galaxies: individual: Fairall 9, Astrophysics - High Energy Astrophysical Phenomena},
+         year = 2023,
+        month = may,
+       volume = {521},
+       number = {1},
+        pages = {251-268},
+          doi = {10.1093/mnras/stad504},
+archivePrefix = {arXiv},
+       eprint = {2210.04924},
+ primaryClass = {astro-ph.HE},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2023MNRAS.521..251H},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+```
+
  
