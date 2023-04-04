@@ -1,7 +1,7 @@
 # AGNvar
 
 Python code for constructing time-dependent SEDs using an input driving X-ray light-curve.
-If you use this code in your work, please reference Hagen & Done (2023)
+If you use this code in your work, please reference Hagen & Done (2023a)
 https://ui.adsabs.harvard.edu/abs/2023MNRAS.521..251H/abstract
 
 
@@ -75,7 +75,7 @@ Hope you find the code useful!
 
 Citing AGNvar
 -------------
-If you use AGNvar in you work / publications please cite Hagen & Done (2023).
+If you use AGNvar in you work / publications please cite Hagen & Done (2023a).
 https://ui.adsabs.harvard.edu/abs/2023MNRAS.521..251H/abstract
 
 Journal reference: Hagen S., Done C., 2023, MNRAS, 521, 251
